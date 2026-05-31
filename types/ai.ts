@@ -1,4 +1,5 @@
 // types/ai.ts — the structured contract returned by the AI service layer
+import type { EventType, EvidenceType, AiSuggestionType, AiSuggestionStatus } from "@/types/db";
 export interface DocumentAnalysis {
   documentType: EvidenceType;
   possibleEvent: EventType | null;
