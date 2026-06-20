@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { getCalendar } from "@/lib/queries/calendar";
 import { Badge } from "@/components/ui/badge";
 
@@ -13,12 +14,12 @@ export default async function CalendarPage() {
             <h2 className="text-sm font-semibold">{date}</h2>
             <ul className="space-y-1 border-l pl-4">
               {rows.map((r, i) => (
-                <li key={i} className="flex items-center gap-2 text-sm">
-                  <Badge variant={r.kind === "event" ? "default" : "secondary"}>
-                    {r.kind === "event" ? "Event" : "Inbox"}
-                  </Badge>
-                  <span>{r.label}</span>
-                  {r.kind === "inbox" && !r.linked && <span className="text-xs text-amber-600">unlinked</span>}
+                <li key={i}>
+                  <Link href={r.href} className="flex items-center gap-2 text-sm hover:underline">
+                    <Badge variant={r.kind === "event" ? "default" : "secondary"}>{r.kind === "event" ? "Event" : "Inbox"}</Badge>
+                    <span>{r.label}</span>
+                    {r.kind === "inbox" && !r.linked && <span className="text-xs text-amber-600">unlinked</span>}
+                  </Link>
                 </li>
               ))}
             </ul>

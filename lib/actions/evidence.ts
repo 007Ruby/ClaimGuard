@@ -3,10 +3,14 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getSessionContext } from "@/lib/queries/session";
 
+function touch() {
+  revalidatePath("/inbox"); revalidatePath("/events");
+  revalidatePath("/calendar"); revalidatePath("/");
+}
+
 export async function createInboxItem(formData: FormData) {
   const { orgId, projectId, user } = await getSessionContext();
   const supabase = await createClient();
-
   const source = String(formData.get("source_type") ?? "note");
   const eventIdRaw = String(formData.get("event_id") ?? "");
   const eventId = eventIdRaw && eventIdRaw !== "none" ? eventIdRaw : null;
@@ -22,20 +26,37 @@ export async function createInboxItem(formData: FormData) {
   }
 
   await supabase.from("evidence").insert({
-    org_id: orgId,
-    project_id: projectId,
-    event_id: eventId,
-    status: eventId ? "linked" : "inbox",
-    source_type: source,
+    org_id: orgId, project_id: projectId, event_id: eventId,
+    status: eventId ? "linked" : "inbox", source_type: source,
     title: String(formData.get("title") ?? "").trim() || null,
     content: String(formData.get("content") ?? "").trim() || null,
     event_date: String(formData.get("event_date") ?? "") || null,
-    file_path: filePath,
-    uploaded_by: user.id,
+    file_path: filePath, uploaded_by: user.id,
   });
+  touch();
+}
 
-  revalidatePath("/inbox");
-  revalidatePath("/events");
-  revalidatePath("/calendar");
-  revalidatePath("/");
+export async function updateInboxItem(formData: FormData) {
+  await getSessionContext();
+  const supabase = await createClient();
+  const id = String(formData.get("id") ?? "");
+  if (!id) return;
+  const eventIdRaw = String(formData.get("event_id") ?? "");
+  const eventId = eventIdRaw && eventIdRaw !== "none" ? eventIdRaw : null;
+  await supabase.from("evidence").update({
+    source_type: String(formData.get("source_type") ?? "note"),
+    title: String(formData.get("title") ?? "").trim() || null,
+    content: String(formData.get("content") ?? "").trim() || null,
+    event_date: String(formData.get("event_date") ?? "") || null,
+    event_id: eventId, status: eventId ? "linked" : "inbox",
+  }).eq("id", id);
+  touch();
+}
+
+export async function deleteInboxItem(id: string) {
+  await getSessionContext();
+  const supabase = await createClient();
+  if (!id) return;
+  await supabase.from("evidence").delete().eq("id", id);
+  touch();
 }

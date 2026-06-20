@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
-import { getEvent } from "@/lib/queries/events";
+mport { EventForm } from "@/components/events/event-form";
+import { EventsList } from "@/components/events/events-list";
 import { StatusBadge } from "@/components/events/status-badge";
 import { EVENT_TYPE_LABELS } from "@/lib/constants";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
