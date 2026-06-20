@@ -1,40 +1,49 @@
-import Link from "next/link";
-import { listEvents } from "@/lib/queries/events";
-import { NewEventDialog } from "@/components/events/new-event-dialog";
-import { StatusBadge } from "@/components/events/status-badge";
-import { EVENT_TYPE_LABELS } from "@/lib/constants";
+import { listEventsWithEvidence } from "@/lib/queries/events";
+import { EventForm } from "@/components/events/event-form";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+
+const LABEL: Record<string, string> = {
+  variation: "Variation", delay: "Delay", payment: "Payment",
+  instruction: "Instruction", site_issue: "Site issue", other: "Other",
+};
 
 export default async function EventsPage() {
-  const events = await listEvents();
-
+  const events = await listEventsWithEvidence();
   return (
-    <div className="p-8">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Events</h1>
-        <NewEventDialog />
-      </div>
-
-      {events.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
-          No events yet. Create your first one to get started.
-        </div>
-      ) : (
-        <div className="divide-y rounded-lg border">
-          {events.map((e) => (
-            <Link key={e.id} href={`/events/${e.id}`}
-              className="flex items-center justify-between p-4 hover:bg-muted/40">
-              <div>
-                <p className="font-medium">{e.title}</p>
-                <p className="text-sm text-muted-foreground">
-                  {EVENT_TYPE_LABELS[e.type] ?? e.type}
-                  {e.occurred_on ? ` · ${e.occurred_on}` : ""}
-                </p>
+    <div className="mx-auto max-w-3xl space-y-8 p-6">
+      <h1 className="text-2xl font-semibold">Events</h1>
+      <EventForm />
+      <div className="space-y-4">
+        {events.length === 0 && <p className="text-sm text-muted-foreground">No events yet.</p>}
+        {events.map((e: any) => (
+          <Card key={e.id}>
+            <CardHeader>
+              <CardTitle className="text-base">{e.title}</CardTitle>
+              <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
+                <span>{e.occurred_on ?? "No date"}</span>
+                <Badge variant="secondary">{LABEL[e.type] ?? e.type}</Badge>
               </div>
-              <StatusBadge status={e.status} />
-            </Link>
-          ))}
-        </div>
-      )}
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {e.description && <p className="text-sm">{e.description}</p>}
+              <div>
+                <p className="text-xs font-medium text-muted-foreground">
+                  {e.evidence?.length ?? 0} linked inbox item(s)
+                </p>
+                <ul className="mt-1 space-y-1">
+                  {(e.evidence ?? []).slice(0, 5).map((ev: any) => (
+                    <li key={ev.id} className="text-sm">
+                      • {ev.title || "(untitled)"}{" "}
+                      <span className="text-muted-foreground">({ev.source_type})</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
     </div>
   );
 }

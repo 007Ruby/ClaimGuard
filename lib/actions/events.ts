@@ -1,7 +1,5 @@
 "use server";
-
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getSessionContext } from "@/lib/queries/session";
 
@@ -9,33 +7,20 @@ export async function createEvent(formData: FormData) {
   const { orgId, projectId, user } = await getSessionContext();
   const supabase = await createClient();
 
-  const occurred = (formData.get("occurred_on") as string) || null;
+  const title = String(formData.get("title") ?? "").trim();
+  if (!title) return;
 
-  const { data, error } = await supabase
-    .from("events")
-    .insert({
-      org_id: orgId,
-      project_id: projectId,
-      created_by: user.id,
-      title: formData.get("title") as string,
-      type: formData.get("type") as string,
-      description: (formData.get("description") as string) || null,
-      occurred_on: occurred,
-    })
-    .select("id")
-    .single();
-
-  if (error || !data) {
-    redirect(`/events?error=${encodeURIComponent(error?.message ?? "Failed")}`);
-  }
+  await supabase.from("events").insert({
+    org_id: orgId,
+    project_id: projectId,
+    title,
+    description: String(formData.get("description") ?? "").trim() || null,
+    type: String(formData.get("type") ?? "other"),
+    occurred_on: String(formData.get("occurred_on") ?? "") || null,
+    created_by: user.id,
+  });
 
   revalidatePath("/events");
-  redirect(`/events/${data.id}`);
-}
-
-export async function updateEventStatus(id: string, status: string) {
-  const supabase = await createClient();
-  await supabase.from("events").update({ status }).eq("id", id);
-  revalidatePath(`/events/${id}`);
-  revalidatePath("/events");
+  revalidatePath("/calendar");
+  revalidatePath("/");
 }

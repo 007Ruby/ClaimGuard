@@ -11,7 +11,6 @@ const nav = [
   { href: "/", label: "What's Next", icon: LayoutDashboard },
   { href: "/inbox", label: "Inbox", icon: Inbox },
   { href: "/events", label: "Events", icon: AlertCircle },
-  { href: "/deadlines", label: "Deadlines", icon: Clock },
   { href: "/claims", label: "Claims", icon: FileText },
   { href: "/calendar", label: "Calendar", icon: Calendar },
 ];
