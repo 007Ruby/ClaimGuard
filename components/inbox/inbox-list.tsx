@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { formatDate } from "@/lib/format";
 
 const SOURCES = [["pasted_email","Pasted email"],["note","Note"],["file","File upload"]] as const;
 const SOURCE_LABEL: Record<string,string> = Object.fromEntries(SOURCES);
@@ -39,7 +40,7 @@ export function InboxList({ items, events, openId }: { items: InboxItem[]; event
               <p className="text-xs text-muted-foreground">
                 {SOURCE_LABEL[it.source_type] ?? it.source_type}
                 {it.event_date ? ` · event ${it.event_date}` : ""}
-                {` · added ${new Date(it.created_at).toLocaleDateString()}`}
+                {` · added ${formatDate(it.created_at)}`}
               </p>
               {it.event && (
                 <p className="text-xs">
