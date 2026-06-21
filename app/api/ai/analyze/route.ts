@@ -43,26 +43,27 @@ export async function POST(req: Request) {
     ? String(cls.category).toLowerCase() : "other";
   const eventDate = cls.event_date || todayISO();
 
-  // ---- Step 2: PRE-FILTER events by category ------------------------------
+  // ---- Step 2: load all events (no category filter — match on subject matter) ----
   const { data: allEvents } = await supabase
     .from("events").select("id, title, type, occurred_on, description")
     .eq("project_id", projectId);
-  const candidates = (allEvents ?? []).filter((e: any) => e.type === category);
+  const candidates = allEvents ?? [];
 
-  // ---- Step 3: link decision — only runs if a same-category event exists --
-  let decision: any = { action: "create", event_id: null, match_score: 0, reason: "No same-category event exists." };
+  // ---- Step 3: link decision — runs if any event exists -------------------
+  let decision: any = { action: "create", event_id: null, match_score: 0, reason: "No events exist yet." };
   if (candidates.length > 0) {
     try {
       const p = buildLinkPrompt(
         { title: cls.title ?? "", category, summary: cls.summary ?? "" },
-        candidates.map((e: any) => ({ id: e.id, title: e.title, occurred_on: e.occurred_on, description: e.description }))
+        candidates.map((e: any) => ({
+          id: e.id, title: e.title, type: e.type, occurred_on: e.occurred_on, description: e.description,
+        }))
       );
       decision = await askJSON(p.system, p.user);
     } catch {
       decision = { action: "create", event_id: null, match_score: 0, reason: "Link step failed; defaulting to create." };
     }
   }
-
   // ---- Step 4: THRESHOLD GATE ---------------------------------------------
   const score = typeof decision.match_score === "number" ? decision.match_score : 0;
   if (decision.action === "link") {

@@ -34,33 +34,43 @@ export function buildClassifyPrompt(sourceType: string, content: string) {
   return { system, user };
 }
 
-// Step 3: link decision, run ONLY against same-category candidates.
+// Step 3: link decision. Sees ALL events; matches on subject matter, not category.
 export function buildLinkPrompt(
   evidence: { title: string; category: string; summary: string },
-  candidates: { id: string; title: string; occurred_on: string | null; description: string | null }[]
+  candidates: { id: string; title: string; type: string; occurred_on: string | null; description: string | null }[]
 ) {
   const list = candidates
-    .map((e) => `- id:${e.id} | "${e.title}" | date:${e.occurred_on ?? "n/a"} | notes: ${e.description ?? "—"}`)
+    .map((e) => `- id:${e.id} | "${e.title}" | category:${e.type} | date:${e.occurred_on ?? "n/a"} | notes: ${e.description ?? "—"}`)
     .join("\n");
 
   const system = [
     "You are a construction contract-administration assistant. Return JSON only.",
-    "You are given ONE piece of evidence and a shortlist of EXISTING events that are ALREADY the same",
-    "category as the evidence. Decide whether the evidence concerns the SAME underlying matter as one.",
+    "You are given ONE piece of evidence and a list of EXISTING events on the project.",
+    "Decide whether the evidence concerns the SAME real-world MATTER as one of the events.",
+    "",
+    "Judge on SUBJECT, not document type. Same matter means things like:",
+    "- the same physical work area or location (e.g. east elevation, Level 12, north core),",
+    "- the same drawing / instruction / RFI / variation / certificate reference (e.g. AI-114, CW-204, PC No. 07),",
+    "- the same dispute, deduction, or chain of correspondence.",
+    "",
+    "CRITICAL: a related event can be a DIFFERENT category from the evidence. One real matter often",
+    "produces several document types — e.g. an instruction (category: instruction) and the resulting",
+    "scope change (category: variation) are the SAME matter and SHOULD link. Never refuse to link just",
+    "because the categories differ. The evidence's own category is only a hint, not a filter.",
+    "",
     "Rules:",
-    "- 'link' ONLY if it is the same specific matter (same certificate, same instruction, same work area,",
-    "  same dispute). Same category is NOT enough on its own.",
-    "- 'create' if none of the listed events concern the same matter.",
-    "- 'ask' if two or more plausibly match and you cannot tell which.",
-    "- match_score is your 0.0-1.0 confidence that the evidence and the chosen event are the SAME matter.",
-    "  Score LOW when guessing; only score high for a concrete subject-matter overlap.",
+    "- 'link' if the evidence and a listed event are clearly the same matter (shared area, reference, or dispute).",
+    "- 'create' if no listed event concerns the same matter.",
+    "- 'ask' if two or more events plausibly match and you cannot tell which.",
+    "- match_score is your 0.0-1.0 confidence that evidence and chosen event are the SAME matter.",
+    "  Score high only for a concrete overlap (shared reference, area, or dispute). Score low when guessing.",
     "- In 'reason', quote the deciding words from BOTH the evidence and the event (or state none matched).",
   ].join("\n");
 
   const user = [
-    `EVIDENCE: "${evidence.title}" (category: ${evidence.category})`,
+    `EVIDENCE: "${evidence.title}" (category hint: ${evidence.category})`,
     `EVIDENCE SUMMARY: ${evidence.summary}`,
-    `SAME-CATEGORY EVENTS:\n${list}`,
+    `EXISTING EVENTS:\n${list}`,
     "",
     "Return JSON exactly shaped like:",
     `{
