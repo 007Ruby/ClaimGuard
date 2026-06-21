@@ -3,6 +3,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { createInboxItem } from "@/lib/actions/evidence";
 import { resolveSuggestion } from "@/lib/actions/suggestions";
+import { usePersistentState } from "@/lib/use-persistent-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,39 +14,67 @@ import { Sparkles } from "lucide-react";
 
 const SOURCES = [["pasted_email","Pasted email"],["note","Note"],["file","File upload"]] as const;
 
+type Draft = { source: string; sourceTouched: boolean; title: string; content: string; eventDate: string; eventId: string };
+const EMPTY: Draft = { source: "note", sourceTouched: false, title: "", content: "", eventDate: "", eventId: "none" };
+
 type Suggestion = {
-  title?: string; event_date?: string | null; summary?: string; confidence?: string;
+  title?: string;
+  event_date?: string | null;
+  summary?: string;
+  confidence?: string;
+  category?: string;                 // added — now returned by the classify step
   event_decision?: {
-    action: "link" | "create" | "ask"; event_id?: string | null; reason?: string;
+    action: "link" | "create" | "ask";
+    event_id?: string | null;
+    match_score?: number;            // added — now returned by the link step
+    reason?: string;
     new_event?: { title?: string; type?: string; occurred_on?: string | null; description?: string } | null;
   };
 };
 
+// Note 2: looks like an email if it opens with a greeting or ends with a sign-off.
+function looksLikeEmail(text: string): boolean {
+  const t = text.trim();
+  if (t.length < 20) return false;
+  const greeting = /^(dear|hi|hello|good\s+(morning|afternoon|evening)|to\s+whom)\b/i.test(t);
+  const tail = t.slice(-140);
+  const signoff = /(kind regards|best regards|warm regards|regards|sincerely|yours (faithfully|sincerely|truly)|many thanks|thank you|thanks|cheers|best wishes)/i.test(tail);
+  return greeting || signoff;
+}
+
 export function InboxForm({ events }: { events: { id: string; title: string }[] }) {
   const router = useRouter();
   const [pending, start] = useTransition();
-  const [source, setSource] = useState("note");
-  const [title, setTitle] = useState("");
-  const [content, setContent] = useState("");
-  const [eventDate, setEventDate] = useState("");
-  const [eventId, setEventId] = useState("none");
+  const [draft, setDraft, clearDraft] = usePersistentState<Draft>("inbox-draft", EMPTY);
 
   const [analyzing, setAnalyzing] = useState(false);
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
   const [suggestionId, setSuggestionId] = useState<string | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
 
-  function reset() {
-    setSource("note"); setTitle(""); setContent(""); setEventDate(""); setEventId("none");
-    setSuggestion(null); setSuggestionId(null); setAiError(null);
+  function patch(p: Partial<Draft>) { setDraft((d) => ({ ...d, ...p })); }
+
+  function onContent(v: string) {
+    setDraft((d) => {
+      const next = { ...d, content: v };
+      if (!d.sourceTouched && d.source !== "file" && looksLikeEmail(v)) next.source = "pasted_email";
+      return next;
+    });
   }
 
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const fd = new FormData(e.currentTarget);
-    fd.set("source_type", source); fd.set("event_id", eventId);
-    fd.set("title", title); fd.set("content", content); fd.set("event_date", eventDate);
-    start(async () => { await createInboxItem(fd); reset(); router.refresh(); });
+    const fd = new FormData(e.currentTarget); // captures the file input when source = file
+    fd.set("source_type", draft.source);
+    fd.set("event_id", draft.eventId);
+    fd.set("title", draft.title);
+    fd.set("content", draft.content);
+    fd.set("event_date", draft.eventDate);
+    start(async () => {
+      await createInboxItem(fd);
+      clearDraft(); setDraft(EMPTY); setSuggestion(null); setSuggestionId(null);
+      router.refresh();
+    });
   }
 
   async function analyze() {
@@ -53,7 +82,7 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
     try {
       const res = await fetch("/api/ai/analyze", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source_type: source, content }),
+        body: JSON.stringify({ source_type: draft.source, content: draft.content }),
       });
       if (!res.ok) throw new Error();
       const data = await res.json();
@@ -65,12 +94,15 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
 
   function accept() {
     if (!suggestion) return;
-    if (suggestion.title) setTitle(suggestion.title);
-    if (suggestion.event_date) setEventDate(suggestion.event_date);
     const dec = suggestion.event_decision;
-    if (dec?.action === "link" && dec.event_id) setEventId(dec.event_id);
+    setDraft((d) => {
+      const next = { ...d };
+      if (suggestion.title) next.title = suggestion.title;
+      if (suggestion.event_date) next.eventDate = suggestion.event_date;
+      if (dec?.action === "link" && dec.event_id) next.eventId = dec.event_id;
+      return next;
+    });
     if (suggestionId) resolveSuggestion(suggestionId, true);
-    // For 'create' / 'ask' we keep the panel so its CTA / note stays visible.
     if (dec?.action !== "create" && dec?.action !== "ask") setSuggestion(null);
   }
 
@@ -81,7 +113,7 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
 
   function goCreateEvent() {
     const ne = suggestion?.event_decision?.new_event;
-    const params = new URLSearchParams({ new: "1" });
+    const params = new URLSearchParams({ new: "1", ts: Date.now().toString() });
     if (ne?.title) params.set("title", ne.title);
     if (ne?.type) params.set("type", ne.type);
     if (ne?.occurred_on) params.set("occurred_on", ne.occurred_on);
@@ -89,7 +121,7 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
     router.push(`/events?${params.toString()}`);
   }
 
-  const canAnalyze = source !== "file" && content.trim().length > 0 && !analyzing;
+  const canAnalyze = draft.source !== "file" && draft.content.trim().length > 0 && !analyzing;
 
   return (
     <Card>
@@ -97,35 +129,36 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
       <CardContent>
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-1.5"><Label htmlFor="title">Title</Label>
-            <Input id="title" value={title} onChange={(e) => setTitle(e.target.value)} required /></div>
+            <Input id="title" name="title" value={draft.title} onChange={(e) => patch({ title: e.target.value })} required /></div>
+
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5"><Label>Source type</Label>
-              <Select value={source} onValueChange={setSource}>
+              <Select value={draft.source} onValueChange={(v) => patch({ source: v, sourceTouched: true })}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>{SOURCES.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent>
               </Select></div>
             <div className="space-y-1.5"><Label htmlFor="event_date">Event date</Label>
-              <Input id="event_date" type="date" value={eventDate} onChange={(e) => setEventDate(e.target.value)} /></div>
+              <Input id="event_date" type="date" value={draft.eventDate} onChange={(e) => patch({ eventDate: e.target.value })} /></div>
           </div>
 
-          {source === "file" ? (
+          {draft.source === "file" ? (
             <div className="space-y-1.5"><Label htmlFor="file">File</Label>
               <Input id="file" name="file" type="file" /></div>
           ) : (
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
-                <Label htmlFor="content">{source === "pasted_email" ? "Pasted email" : "Note"}</Label>
+                <Label htmlFor="content">{draft.source === "pasted_email" ? "Pasted email" : "Note"}</Label>
                 <Button type="button" size="sm" variant="secondary" onClick={analyze} disabled={!canAnalyze}>
                   <Sparkles className="mr-1 h-4 w-4" />{analyzing ? "Analyzing…" : "Analyze with AI"}
                 </Button>
               </div>
-              <Textarea id="content" value={content} onChange={(e) => setContent(e.target.value)} rows={5}
-                placeholder={source === "pasted_email" ? "Paste the email here…" : "e.g. Delay on site on 14 May due to…"} />
+              <Textarea id="content" value={draft.content} onChange={(e) => onContent(e.target.value)} rows={5}
+                placeholder={draft.source === "pasted_email" ? "Paste the email here…" : "e.g. Delay on site on 14 May due to…"} />
             </div>
           )}
 
           <div className="space-y-1.5"><Label>Linked event</Label>
-            <Select value={eventId} onValueChange={setEventId}>
+            <Select value={draft.eventId} onValueChange={(v) => patch({ eventId: v })}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">None</SelectItem>
@@ -150,6 +183,8 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
               {suggestion.title && <li>Title: {suggestion.title}</li>}
               {suggestion.event_date && <li>Event date: {suggestion.event_date}</li>}
               {suggestion.event_decision?.reason && <li>Event: {suggestion.event_decision.reason}</li>}
+              {typeof suggestion.event_decision?.match_score === "number" &&
+            <li>Match score: {suggestion.event_decision.match_score.toFixed(2)}</li>}
             </ul>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <Button type="button" size="sm" onClick={accept}>Accept</Button>

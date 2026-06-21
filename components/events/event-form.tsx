@@ -1,6 +1,8 @@
 "use client";
-import { useRef, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { createEvent } from "@/lib/actions/events";
+import { usePersistentState } from "@/lib/use-persistent-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,41 +11,76 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const CATEGORIES = [["variation","Variation"],["delay","Delay"],["payment","Payment"],["instruction","Instruction"],["site_issue","Site issue"],["other","Other"]] as const;
+const VALID = CATEGORIES.map(([v]) => v) as string[];
+function normType(t?: string) {
+  const v = (t ?? "").toLowerCase().trim();
+  return VALID.includes(v) ? v : "other";
+}
 
+type Draft = { title: string; description: string; type: string; occurred_on: string };
+const EMPTY: Draft = { title: "", description: "", type: "other", occurred_on: "" };
 type Initial = { title?: string; type?: string; occurred_on?: string; description?: string };
 
 export function EventForm({ initial }: { initial?: Initial }) {
+  const router = useRouter();
   const [pending, start] = useTransition();
-  const [type, setType] = useState(initial?.type ?? "other");
-  const ref = useRef<HTMLFormElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  const fromAI = !!initial;
+
+  // AI prefill is the form's initial state (deterministic from URL → no hydration issue,
+  // and no restore/persist so it can't be clobbered by a saved manual draft).
+  const seed: Draft = fromAI
+    ? {
+        title: initial!.title ?? "",
+        description: initial!.description ?? "",
+        type: normType(initial!.type),
+        occurred_on: initial!.occurred_on ?? "",
+      }
+    : EMPTY;
+
+  const [draft, setDraft, clearDraft] = usePersistentState<Draft>(
+    "event-draft", seed, { restore: !fromAI, persist: !fromAI }
+  );
+
+  function patch(p: Partial<Draft>) { setDraft((d) => ({ ...d, ...p })); }
 
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const fd = new FormData(e.currentTarget);
-    fd.set("type", type);
-    start(async () => { await createEvent(fd); ref.current?.reset(); setType("other"); });
+    const fd = new FormData();
+    fd.set("title", draft.title);
+    fd.set("description", draft.description);
+    fd.set("type", draft.type);
+    fd.set("occurred_on", draft.occurred_on);
+    start(async () => {
+      const res = await createEvent(fd);
+      if (res?.error) { setError(res.error); return; }
+      setError(null);
+      if (fromAI) router.replace("/events");          // drop ?new params, back to the plain form
+      else { clearDraft(); setDraft(EMPTY); }
+    });
   }
 
   return (
-    <Card className={initial ? "border-primary" : undefined}>
+    <Card className={fromAI ? "border-primary" : undefined}>
       <CardHeader>
-        <CardTitle>{initial ? "New event — from AI suggestion (review & save)" : "New event"}</CardTitle>
+        <CardTitle>{fromAI ? "New event — from AI suggestion (review & save)" : "New event"}</CardTitle>
       </CardHeader>
       <CardContent>
-        <form ref={ref} onSubmit={onSubmit} className="space-y-4">
+        <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-1.5"><Label htmlFor="title">Title</Label>
-            <Input id="title" name="title" defaultValue={initial?.title ?? ""} required /></div>
+            <Input id="title" value={draft.title} onChange={(e) => patch({ title: e.target.value })} required /></div>
           <div className="space-y-1.5"><Label htmlFor="description">Description</Label>
-            <Textarea id="description" name="description" rows={3} defaultValue={initial?.description ?? ""} /></div>
+            <Textarea id="description" rows={3} value={draft.description} onChange={(e) => patch({ description: e.target.value })} /></div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5"><Label htmlFor="occurred_on">Event date</Label>
-              <Input id="occurred_on" name="occurred_on" type="date" defaultValue={initial?.occurred_on ?? ""} /></div>
+              <Input id="occurred_on" type="date" value={draft.occurred_on} onChange={(e) => patch({ occurred_on: e.target.value })} /></div>
             <div className="space-y-1.5"><Label>Category</Label>
-              <Select value={type} onValueChange={setType}>
+              <Select value={draft.type} onValueChange={(v) => patch({ type: v })}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>{CATEGORIES.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent>
               </Select></div>
           </div>
+          {error && <p className="text-sm text-amber-600">{error}</p>}
           <Button type="submit" disabled={pending}>{pending ? "Saving…" : "Save event"}</Button>
         </form>
       </CardContent>
