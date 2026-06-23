@@ -1,6 +1,6 @@
 import { listClaims } from "@/lib/queries/claims";
 import { listEventsForSelect } from "@/lib/queries/events";
-import { ClaimForm } from "@/components/claims/claim-form";
+import { ClaimBuilder } from "@/components/claims/claim-builder";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -14,7 +14,7 @@ export default async function ClaimsPage() {
   return (
     <div className="mx-auto max-w-3xl space-y-8 p-6">
       <h1 className="text-2xl font-semibold">Claims</h1>
-      <ClaimForm events={events} />
+      <ClaimBuilder events={events as any} />
       <div className="space-y-4">
         {claims.length === 0 && <p className="text-sm text-muted-foreground">No claims yet.</p>}
         {claims.map((c: any) => (
@@ -24,13 +24,16 @@ export default async function ClaimsPage() {
                 <CardTitle className="text-base">{c.title}</CardTitle>
                 <Badge variant="secondary">{c.status}</Badge>
               </div>
-              <p className="text-xs text-muted-foreground">{c.type ? (TYPE_LABEL[c.type] ?? c.type) : "No type"}</p>
+              <p className="text-xs text-muted-foreground">
+                {c.type ? (TYPE_LABEL[c.type] ?? c.type) : "No type"}
+                {c.relief_sought ? ` · ${c.relief_sought}` : ""}
+                {c.amount ? ` · ${c.currency} ${Number(c.amount).toLocaleString()}` : ""}
+              </p>
             </CardHeader>
             <CardContent className="space-y-2">
-              {c.body && <p className="text-sm">{c.body}</p>}
+              {c.body && <p className="line-clamp-3 whitespace-pre-wrap text-sm">{c.body}</p>}
               <p className="text-xs text-muted-foreground">
-                Linked events:{" "}
-                {(c.claim_events ?? []).map((ce: any) => ce.event?.title).filter(Boolean).join(", ") || "none"}
+                Events: {(c.claim_events ?? []).map((ce: any) => ce.event?.title).filter(Boolean).join(", ") || "none"}
               </p>
             </CardContent>
           </Card>

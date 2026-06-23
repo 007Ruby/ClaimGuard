@@ -19,7 +19,7 @@ export async function listEventsForSelect() {
   const supabase = await createClient();
   const { data } = await supabase
     .from("events")
-    .select("id, title")
+    .select("id, title, type, occurred_on")
     .eq("project_id", projectId)
     .order("occurred_on", { ascending: false, nullsFirst: false });
   return data ?? [];
