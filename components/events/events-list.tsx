@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { EventStatusFlag, type EventFlag } from "@/components/events/event-status-flag";
 
 const CATEGORIES = [["variation","Variation"],["delay","Delay"],["payment","Payment"],["instruction","Instruction"],["site_issue","Site issue"],["other","Other"]] as const;
 const LABEL: Record<string,string> = Object.fromEntries(CATEGORIES);
@@ -20,7 +21,7 @@ type EventItem = {
   evidence?: { id: string; title: string | null; source_type: string }[];
 };
 
-export function EventsList({ events, openId }: { events: EventItem[]; openId?: string }) {
+export function EventsList({ events, openId, flags }: { events: EventItem[]; openId?: string; flags?: Record<string, EventFlag> }) {
   const [active, setActive] = useState<string | null>(openId ?? null);
   const current = events.find((e) => e.id === active) ?? null;
 
@@ -32,9 +33,16 @@ export function EventsList({ events, openId }: { events: EventItem[]; openId?: s
           <Card key={e.id} className="cursor-pointer transition-colors hover:bg-muted/40" onClick={() => setActive(e.id)}>
             <CardHeader>
               <CardTitle className="text-base">{e.title}</CardTitle>
-              <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                 <span>{e.occurred_on ?? "No date"}</span>
                 <Badge variant="secondary">{LABEL[e.type] ?? e.type}</Badge>
+                {/* FIDIC obligation flag — stopPropagation so its popover opens
+                    instead of the card's edit dialog. */}
+                {flags?.[e.id] && (
+                  <span onClick={(c) => c.stopPropagation()}>
+                    <EventStatusFlag flag={flags[e.id]} />
+                  </span>
+                )}
               </div>
             </CardHeader>
             <CardContent className="space-y-3">

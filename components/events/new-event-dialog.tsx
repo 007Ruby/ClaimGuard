@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { createEvent } from "@/lib/actions/events";
 import { EVENT_TYPE_LABELS, EVENT_TYPE_OPTIONS } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,21 @@ import {
 
 export function NewEventDialog() {
   const [open, setOpen] = useState(false);
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    start(async () => {
+      const res = await createEvent(fd);
+      if (res?.error) { setError(res.error); return; }
+      setError(null);
+      setOpen(false);
+      router.refresh(); // re-render the list so the new event's flag computes
+    });
+  }
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -23,7 +39,7 @@ export function NewEventDialog() {
         <DialogHeader>
           <DialogTitle>New event</DialogTitle>
         </DialogHeader>
-        <form action={createEvent} className="space-y-4">
+        <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="title">Title</Label>
             <Input id="title" name="title" required
@@ -47,8 +63,9 @@ export function NewEventDialog() {
             <Textarea id="description" name="description"
                       placeholder="What happened?" rows={3} />
           </div>
+          {error && <p className="text-sm text-amber-600">{error}</p>}
           <DialogFooter>
-            <Button type="submit">Create event</Button>
+            <Button type="submit" disabled={pending}>{pending ? "Creating…" : "Create event"}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
