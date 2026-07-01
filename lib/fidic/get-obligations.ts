@@ -19,7 +19,7 @@ import type { EventFlag } from "@/components/events/event-status-flag";
 import type { WhatsNextItem } from "@/components/whats-next/obligation-item";
 
 // If you ran migration 0005, change this to "project_contracts".
-const CONTRACT_TABLE = "contracts";
+const CONTRACT_TABLE = "project_contracts";
 
 type EventRow = {
   id: string;

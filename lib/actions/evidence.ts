@@ -15,8 +15,10 @@ export async function createInboxItem(formData: FormData) {
   const eventIdRaw = String(formData.get("event_id") ?? "");
   const eventId = eventIdRaw && eventIdRaw !== "none" ? eventIdRaw : null;
 
-  let filePath: string | null = null;
-  if (source === "file") {
+  // If the inbox form already uploaded the PDF (via /api/inbox/extract-pdf) it
+  // sends file_path; use it as-is. Otherwise fall back to uploading the raw file.
+  let filePath: string | null = String(formData.get("file_path") ?? "") || null;
+  if (!filePath && source === "file") {
     const file = formData.get("file") as File | null;
     if (file && file.size > 0) {
       const path = `${projectId}/${crypto.randomUUID()}-${file.name}`;

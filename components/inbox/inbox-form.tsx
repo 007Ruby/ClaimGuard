@@ -14,25 +14,24 @@ import { Sparkles } from "lucide-react";
 
 const SOURCES = [["pasted_email","Pasted email"],["note","Note"],["file","File upload"]] as const;
 
-type Draft = { source: string; sourceTouched: boolean; title: string; content: string; eventDate: string; eventId: string };
-const EMPTY: Draft = { source: "note", sourceTouched: false, title: "", content: "", eventDate: "", eventId: "none" };
+type Draft = { source: string; sourceTouched: boolean; title: string; content: string; eventDate: string; eventId: string; filePath: string };
+const EMPTY: Draft = { source: "note", sourceTouched: false, title: "", content: "", eventDate: "", eventId: "none", filePath: "" };
 
 type Suggestion = {
   title?: string;
   event_date?: string | null;
   summary?: string;
   confidence?: string;
-  category?: string;                 // added — now returned by the classify step
+  category?: string;
   event_decision?: {
     action: "link" | "create" | "ask";
     event_id?: string | null;
-    match_score?: number;            // added — now returned by the link step
+    match_score?: number;
     reason?: string;
     new_event?: { title?: string; type?: string; occurred_on?: string | null; description?: string } | null;
   };
 };
 
-// Note 2: looks like an email if it opens with a greeting or ends with a sign-off.
 function looksLikeEmail(text: string): boolean {
   const t = text.trim();
   if (t.length < 20) return false;
@@ -52,6 +51,10 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
   const [suggestionId, setSuggestionId] = useState<string | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
 
+  // PDF extraction state
+  const [extracting, setExtracting] = useState(false);
+  const [extractMsg, setExtractMsg] = useState<string | null>(null);
+
   function patch(p: Partial<Draft>) { setDraft((d) => ({ ...d, ...p })); }
 
   function onContent(v: string) {
@@ -62,17 +65,44 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
     });
   }
 
+  async function onFile(file: File | undefined) {
+    if (!file) return;
+    if (file.type !== "application/pdf") { setExtractMsg("PDF only for now."); return; }
+    setExtracting(true); setExtractMsg(null); setSuggestion(null);
+    try {
+      const fd = new FormData();
+      fd.set("file", file);
+      const res = await fetch("/api/inbox/extract-pdf", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? "Extraction failed");
+      setDraft((d) => ({
+        ...d,
+        filePath: data.file_path,
+        content: data.text || d.content,
+        title: d.title || file.name.replace(/\.pdf$/i, ""),
+      }));
+      setExtractMsg(
+        data.chars > 0
+          ? `Uploaded and extracted ${data.chars.toLocaleString()} characters — you can Analyze it now.`
+          : "Uploaded, but no text found (scanned PDF?). Add a note describing it.",
+      );
+    } catch (e: any) {
+      setExtractMsg(e?.message ?? "Couldn't process the PDF.");
+    } finally { setExtracting(false); }
+  }
+
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const fd = new FormData(e.currentTarget); // captures the file input when source = file
+    const fd = new FormData();
     fd.set("source_type", draft.source);
     fd.set("event_id", draft.eventId);
     fd.set("title", draft.title);
     fd.set("content", draft.content);
     fd.set("event_date", draft.eventDate);
+    if (draft.filePath) fd.set("file_path", draft.filePath); // already uploaded by the route
     start(async () => {
       await createInboxItem(fd);
-      clearDraft(); setDraft(EMPTY); setSuggestion(null); setSuggestionId(null);
+      clearDraft(); setDraft(EMPTY); setSuggestion(null); setSuggestionId(null); setExtractMsg(null);
       router.refresh();
     });
   }
@@ -121,7 +151,9 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
     router.push(`/events?${params.toString()}`);
   }
 
-  const canAnalyze = draft.source !== "file" && draft.content.trim().length > 0 && !analyzing;
+  // Analyze is available whenever there's text — including text extracted from a PDF.
+  const canAnalyze = draft.content.trim().length > 0 && !analyzing && !extracting;
+  const showContentBlock = draft.source !== "file" || draft.content.trim().length > 0;
 
   return (
     <Card>
@@ -141,13 +173,22 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
               <Input id="event_date" type="date" value={draft.eventDate} onChange={(e) => patch({ eventDate: e.target.value })} /></div>
           </div>
 
-          {draft.source === "file" ? (
-            <div className="space-y-1.5"><Label htmlFor="file">File</Label>
-              <Input id="file" name="file" type="file" /></div>
-          ) : (
+          {draft.source === "file" && (
+            <div className="space-y-1.5">
+              <Label htmlFor="file">PDF file</Label>
+              <Input id="file" name="file" type="file" accept="application/pdf"
+                     onChange={(e) => onFile(e.target.files?.[0])} disabled={extracting} />
+              {extracting && <p className="text-xs text-muted-foreground">Uploading and extracting text…</p>}
+              {extractMsg && <p className="text-xs text-muted-foreground">{extractMsg}</p>}
+            </div>
+          )}
+
+          {showContentBlock && (
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
-                <Label htmlFor="content">{draft.source === "pasted_email" ? "Pasted email" : "Note"}</Label>
+                <Label htmlFor="content">
+                  {draft.source === "file" ? "Extracted text" : draft.source === "pasted_email" ? "Pasted email" : "Note"}
+                </Label>
                 <Button type="button" size="sm" variant="secondary" onClick={analyze} disabled={!canAnalyze}>
                   <Sparkles className="mr-1 h-4 w-4" />{analyzing ? "Analyzing…" : "Analyze with AI"}
                 </Button>
@@ -166,7 +207,7 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
               </SelectContent>
             </Select></div>
 
-          <Button type="submit" disabled={pending}>{pending ? "Saving…" : "Save"}</Button>
+          <Button type="submit" disabled={pending || extracting}>{pending ? "Saving…" : "Save"}</Button>
         </form>
 
         {aiError && <p className="mt-4 text-sm text-amber-600">{aiError}</p>}

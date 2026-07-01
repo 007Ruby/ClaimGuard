@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  LayoutDashboard, Inbox, AlertCircle, Clock, FileText, Calendar,
+  LayoutDashboard, Inbox, AlertCircle, Clock, FileText, Calendar, 
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -13,6 +13,7 @@ const nav = [
   { href: "/events", label: "Events", icon: AlertCircle },
   { href: "/claims", label: "Claims", icon: FileText },
   { href: "/calendar", label: "Calendar", icon: Calendar },
+  {href: "/settings", label: "Settings", icon: Clock }
 ];
 
 export function Sidebar() {

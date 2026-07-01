@@ -3,7 +3,7 @@ import { getWhatsNext } from "@/lib/queries/whats-next";
 import { loadWhatsNext } from "@/lib/fidic/get-obligations";
 import { ObligationItem } from "@/components/whats-next/obligation-item";
 import { Card, CardContent } from "@/components/ui/card";
-import { Inbox, FileText, AlertCircle } from "lucide-react";
+import { Inbox, FileText, AlertCircle} from "lucide-react";
 
 export default async function WhatsNextPage() {
   // Fetch both in parallel: the FIDIC obligations and the housekeeping counts.
@@ -18,14 +18,26 @@ export default async function WhatsNextPage() {
   const awaiting = items.filter((i) => i.status === "awaiting");
 
   // Housekeeping prompts.
-  const cards = [
-    { show: unlinkedInbox > 0, href: "/inbox", icon: Inbox,
-      text: `${unlinkedInbox} inbox item${unlinkedInbox === 1 ? " is" : "s are"} not linked to any event` },
-    { show: draftClaims > 0, href: "/claims", icon: FileText,
-      text: `${draftClaims} draft claim${draftClaims === 1 ? " is" : "s are"} waiting` },
-    { show: eventsNoEvidence > 0, href: "/events", icon: AlertCircle,
-      text: `${eventsNoEvidence} event${eventsNoEvidence === 1 ? " has" : "s have"} no evidence linked yet` },
-  ].filter((c) => c.show);
+ const cards = [
+  {
+    show: unlinkedInbox > 0,
+    href: "/inbox",
+    icon: Inbox,
+    text: `${unlinkedInbox} inbox item${unlinkedInbox === 1 ? " is" : "s are"} not linked to any event`,
+  },
+  {
+    show: draftClaims > 0,
+    href: "/claims",
+    icon: FileText,
+    text: `${draftClaims} draft claim${draftClaims === 1 ? " is" : "s are"} waiting`,
+  },
+  {
+    show: eventsNoEvidence > 0,
+    href: "/events",
+    icon: AlertCircle,
+    text: `${eventsNoEvidence} event${eventsNoEvidence === 1 ? " has" : "s have"} no evidence linked yet`,
+  },
+].filter((c) => c.show);
 
   const nothing = items.length === 0 && cards.length === 0;
 
