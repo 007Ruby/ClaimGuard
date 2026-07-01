@@ -1,20 +1,36 @@
-import Link from "next/link";
-import { Card, CardContent } from "@/components/ui/card";
-import { FileText } from "lucide-react";
+import { getSessionContext } from "@/lib/queries/session";
+import { createClient } from "@/lib/supabase/server";
+import { ContractSummary } from "@/components/contract/contract-summary";
+import { ContractUpload } from "@/components/contract/contract-upload";
 
-export default function SettingsPage() {
+const CONTRACT_TABLE = "project_contracts";
+
+export default async function ContractSettingsPage() {
+  const { projectId } = await getSessionContext();
+  const supabase = await createClient();
+  const { data: contract } = await supabase
+    .from(CONTRACT_TABLE).select("data").eq("project_id", projectId).maybeSingle();
+  const data = (contract?.data as Record<string, any>) ?? null;
+
   return (
-    <div className="mx-auto max-w-3xl space-y-6 p-6">
-      <h1 className="text-2xl font-semibold">Settings</h1>
+    <div className="mx-auto max-w-2xl space-y-6 p-6">
+      <div>
+        <h1 className="text-2xl font-semibold">Contract</h1>
+        <p className="text-sm text-muted-foreground">
+          The contract behind every deadline and claim. Nothing is hardcoded —
+          it all comes from the document you upload here.
+        </p>
+      </div>
 
-      <Link href="/settings/contract">
-        <Card className="transition-colors hover:bg-muted/50">
-          <CardContent className="flex items-center gap-3 p-4">
-            <FileText className="h-5 w-5 text-muted-foreground" />
-            <span className="text-sm">Contract</span>
-          </CardContent>
-        </Card>
-      </Link>
+      {data ? (
+        <ContractSummary data={data} />
+      ) : (
+        <p className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
+          No contract uploaded yet. Upload your FIDIC PDF below to switch on deadlines and claims.
+        </p>
+      )}
+
+      <ContractUpload initial={data} hasExisting={!!data} />
     </div>
   );
 }

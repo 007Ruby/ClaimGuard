@@ -6,12 +6,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Sparkles } from "lucide-react";
+import { Sparkles, AlertTriangle } from "lucide-react";
 
 type Data = Record<string, any>;
 
-// The fields surfaced for review. Everything else extracted is still saved in
-// `data`; these are the ones worth eyeballing (commencementDate drives deadlines).
 const FIELDS: { key: string; label: string; type?: string }[] = [
   { key: "name", label: "Project / works name" },
   { key: "commencementDate", label: "Commencement date", type: "date" },
@@ -25,10 +23,10 @@ const FIELDS: { key: string; label: string; type?: string }[] = [
   { key: "retentionPct", label: "Retention %", type: "number" },
 ];
 
-export function ContractUpload({ initial }: { initial: Data | null }) {
+export function ContractUpload({ initial, hasExisting }: { initial: Data | null; hasExisting?: boolean }) {
   const router = useRouter();
   const [saving, start] = useTransition();
-  const [data, setData] = useState<Data | null>(initial);
+  const [data, setData] = useState<Data | null>(null); // only set after a NEW extract
   const [extracting, setExtracting] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -45,10 +43,18 @@ export function ContractUpload({ initial }: { initial: Data | null }) {
     try {
       const fd = new FormData(); fd.set("file", file);
       const res = await fetch("/api/contract/extract", { method: "POST", body: fd });
-      const json = await res.json();
+      const raw = await res.text();
+      let json: any;
+      try { json = JSON.parse(raw); }
+      catch {
+        throw new Error(
+          `The extract route didn't return JSON (HTTP ${res.status}). It likely crashed or the path is wrong — ` +
+          `check the dev-server terminal. Response started with: ${raw.slice(0, 40)}`,
+        );
+      }
       if (!res.ok) throw new Error(json?.error ?? "Extraction failed");
       setData(json.data);
-      setMsg("Extracted. Review the values below, then save.");
+      setMsg("Extracted. Review the values below, then save to replace the current contract.");
     } catch (e: any) {
       setMsg(e?.message ?? "Couldn't read that PDF.");
     } finally { setExtracting(false); }
@@ -57,8 +63,10 @@ export function ContractUpload({ initial }: { initial: Data | null }) {
   function save() {
     if (!data) return;
     start(async () => {
-      await saveContract(data);
+      const res = await saveContract(data);
+      if (res?.error) { setSaved(false); setMsg(`Save failed: ${res.error}`); return; }
       setSaved(true); setMsg("Saved. Deadlines and claims now use this contract.");
+      setData(null);
       router.refresh();
     });
   }
@@ -66,8 +74,16 @@ export function ContractUpload({ initial }: { initial: Data | null }) {
   return (
     <div className="space-y-6">
       <Card>
-        <CardHeader><CardTitle>Upload contract (PDF)</CardTitle></CardHeader>
-        <CardContent className="space-y-2">
+        <CardHeader>
+          <CardTitle>{hasExisting ? "Replace contract" : "Upload contract"}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {hasExisting && (
+            <div className="flex items-start gap-2 rounded-md bg-amber-50 p-3 text-sm text-amber-800">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>Uploading a new PDF <strong>replaces the current contract</strong>. All deadlines and claims will recompute against the new terms.</span>
+            </div>
+          )}
           <Input type="file" accept="application/pdf" disabled={extracting}
                  onChange={(e) => onFile(e.target.files?.[0])} />
           {extracting && (
@@ -93,7 +109,6 @@ export function ContractUpload({ initial }: { initial: Data | null }) {
                 </div>
               ))}
             </div>
-
             <div className="grid grid-cols-3 gap-4">
               {["employer", "contractor", "engineer"].map((role) => (
                 <div key={role} className="space-y-1.5">
@@ -103,10 +118,11 @@ export function ContractUpload({ initial }: { initial: Data | null }) {
                 </div>
               ))}
             </div>
-
-            <Button onClick={save} disabled={saving}>{saving ? "Saving…" : "Save contract"}</Button>
+            <Button onClick={save} disabled={saving}>
+              {saving ? "Saving…" : hasExisting ? "Save & replace contract" : "Save contract"}
+            </Button>
             <p className="text-xs text-muted-foreground">
-              Anything not shown here (insurance, DAB, arbitration, etc.) is still extracted and saved — these are just the fields most worth checking.
+              Anything not shown here (insurance, DAB, arbitration) is still extracted and saved.
             </p>
           </CardContent>
         </Card>
