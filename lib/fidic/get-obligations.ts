@@ -25,6 +25,8 @@ type EventRow = {
   notice_date: string | null;
   submission_date: string | null;
   engineer_receipt_date: string | null;
+  ipc_issued_date: string | null;
+  suspension_notice_date: string | null;
   last_completed_step_id: string | null;
   closed: boolean | null;
   action_description: string | null;
@@ -69,6 +71,7 @@ export function eventFlag(
       noticeDate: ev.notice_date,
       submissionDate: ev.submission_date ?? date, // payment cycle falls back to event date
       engineerReceiptDate: ev.engineer_receipt_date ?? ev.submission_date ?? date,
+      suspensionNoticeDate: ev.suspension_notice_date,
       lastCompletedStepId: ev.last_completed_step_id,
       closed: ev.closed ?? false,
     },
@@ -79,6 +82,8 @@ export function eventFlag(
 
   const usePersisted = !!ev.obligation_synced_at;
   return {
+    eventId: ev.id,
+    stepId: ob.stepId,
     status: ob.status,
     actionLabel: ob.label,
     actionDescription: usePersisted ? ev.action_description ?? ob.description : ob.description,
@@ -88,6 +93,7 @@ export function eventFlag(
     basisClauses:
       usePersisted && ev.fidic_basis_clauses?.length ? ev.fidic_basis_clauses : ob.basisClauses,
     timeBarred: ob.timeBarred,
+    remedy: ob.remedy ?? null,
   };
 }
 

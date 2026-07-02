@@ -35,8 +35,19 @@ export interface EventTimeline {
   engineerReceiptDate?: string | null; // when Engineer received the claim / statement
   /** id of the step we have already completed (e.g. "20.1-notice"). */
   lastCompletedStepId?: string | null;
+  /** when our 16.1 suspension notice was given. */
+  suspensionNoticeDate?: string | null;
   /** explicitly closed by the user (claim determined / no further action). */
   closed?: boolean;
+}
+
+/** A secondary remedy (e.g. SC 16.1 suspension) surfaced alongside the flag. */
+export interface Remedy {
+  clauseRef: string;
+  label: string;
+  description: string;
+  noticeGiven: boolean;
+  availableFrom?: string; // ISO, once the 16.1 notice starts the 21-day clock
 }
 
 /** Loaded from the project contract data; only what the engine needs. */
@@ -57,6 +68,7 @@ export interface Obligation {
   daysRemaining: number; // negative once overdue
   timeBarred: boolean;
   status: EventStatus;
+  remedy?: Remedy; // e.g. SC 16.1 suspension, when a payment cycle is overdue
 }
 
 const DAY_MS = 86_400_000;
@@ -92,6 +104,8 @@ function anchorDate(
       return tl.submissionDate ?? null;
     case "engineer_receipt_date":
       return tl.engineerReceiptDate ?? tl.submissionDate ?? null;
+    case "suspension_notice_date":
+      return tl.suspensionNoticeDate ?? null;
     case "commencement_date":
       return contract.commencementDate;
   }
@@ -152,7 +166,7 @@ export function resolveObligation(
     status = "action_needed";
   }
 
-  return {
+  const obligation: Obligation = {
     stepId: step.id,
     label: step.label,
     clauseRef: route.procedureClause,
@@ -163,6 +177,55 @@ export function resolveObligation(
     daysRemaining,
     timeBarred: step.timeBarred,
     status,
+  };
+
+  // Payment-overdue consequences: when the Engineer is late certifying (14.6)
+  // or the Employer is late paying (14.7), surface the Contractor's remedies.
+  if (
+    tl.type === "payment" &&
+    dueDate &&
+    daysRemaining < 0 &&
+    (step.id === "14.6-ipc" || step.id === "14.7-payment")
+  ) {
+    const remedy = suspensionRemedy(tl); // SC 16.1
+    if (step.id === "14.7-payment") {
+      // Employer late paying -> financing charges become a live action (14.8).
+      const fin = getStep("14.8-financing");
+      return {
+        stepId: "14.8-financing",
+        label: fin?.label ?? "Claim financing charges",
+        clauseRef: "14.8",
+        basisClauses: ["14.7"],
+        party: "contractor",
+        description: fin?.description ?? "Claim financing charges under SC 14.8.",
+        dueDate: "",
+        daysRemaining, // how many days payment is overdue
+        timeBarred: false,
+        status: "action_needed",
+        remedy,
+      };
+    }
+    // 14.6 late certification -> keep awaiting, attach the remedy.
+    return { ...obligation, remedy };
+  }
+
+  return obligation;
+}
+
+/** SC 16.1: the suspension remedy available once a payment cycle is overdue. */
+function suspensionRemedy(tl: EventTimeline): Remedy {
+  const noticeGiven = !!tl.suspensionNoticeDate;
+  const availableFrom = noticeGiven
+    ? addDays(tl.suspensionNoticeDate as string, 21)
+    : undefined;
+  return {
+    clauseRef: "16.1",
+    label: noticeGiven ? "Suspension right maturing (SC 16.1)" : "Suspension available (SC 16.1)",
+    description: noticeGiven
+      ? `You gave 21-day notice on ${tl.suspensionNoticeDate}. You may suspend or reduce the rate of work from ${availableFrom} until payment/certification is remedied.`
+      : "You may give the Employer not less than 21 days' notice under Sub-Clause 16.1, then suspend or reduce the rate of work until payment/certification is remedied.",
+    noticeGiven,
+    availableFrom,
   };
 }
 

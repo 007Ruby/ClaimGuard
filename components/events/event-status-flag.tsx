@@ -1,4 +1,3 @@
-// components/events/event-status-flag.tsx
 "use client";
 
 import { Badge } from "@/components/ui/badge";
@@ -7,10 +6,10 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Button } from "@/components/ui/button";
-import { AlertTriangle, Clock, CheckCircle2, CircleDashed } from "lucide-react";
-import { CLAUSES } from "@/lib/fidic/clauses";
-import { STATUS_LABEL, type EventStatus } from "@/lib/fidic/engine";
+import { AlertTriangle, Clock, CheckCircle2, CircleDashed, Pause } from "lucide-react";
+import { CLAUSES, STEP_DONE_LABEL } from "@/lib/fidic/clauses";
+import { STATUS_LABEL, type EventStatus, type Remedy } from "@/lib/fidic/engine";
+import { StepCompleteControl } from "@/components/events/step-complete-control";
 
 const STYLES: Record<
   EventStatus,
@@ -25,6 +24,8 @@ const STYLES: Record<
 
 export interface EventFlag {
   status: EventStatus;
+  eventId?: string;
+  stepId?: string;
   actionLabel?: string | null;
   actionDescription?: string | null;
   actionDueDate?: string | null;
@@ -32,15 +33,13 @@ export interface EventFlag {
   clauseRef?: string | null;
   basisClauses?: string[] | null;
   timeBarred?: boolean | null;
+  remedy?: Remedy | null;
 }
 
 function fmt(iso?: string | null) {
   if (!iso) return "—";
   return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    timeZone: "UTC",
+    day: "numeric", month: "short", year: "numeric", timeZone: "UTC",
   }).format(new Date(iso + "T00:00:00.000Z"));
 }
 
@@ -52,15 +51,12 @@ function daysRemaining(iso?: string | null): number | null {
   return Math.round((due - today) / 86_400_000);
 }
 
-export function EventStatusFlag({ flag, onCreateClaim }: {
-  flag: EventFlag;
-  onCreateClaim?: () => void;
-}) {
+export function EventStatusFlag({ flag }: { flag: EventFlag }) {
   const { className, icon: Icon } = STYLES[flag.status];
   const rem = daysRemaining(flag.actionDueDate);
   const clause = flag.clauseRef ? CLAUSES[flag.clauseRef] : undefined;
+  const doneLabel = flag.stepId ? STEP_DONE_LABEL[flag.stepId] : undefined;
 
-  // No-action events get a plain, non-interactive chip.
   if (flag.status === "no_action") {
     return (
       <Badge variant="outline" className={className}>
@@ -87,11 +83,9 @@ export function EventStatusFlag({ flag, onCreateClaim }: {
       </PopoverTrigger>
 
       <PopoverContent align="start" className="w-80 text-sm">
-        {/* What */}
         <div className="font-semibold">{flag.actionLabel ?? STATUS_LABEL[flag.status]}</div>
         <p className="mt-1 text-muted-foreground">{flag.actionDescription}</p>
 
-        {/* By when */}
         <div className="mt-3 grid grid-cols-[88px_1fr] gap-y-1">
           <span className="text-muted-foreground">By</span>
           <span className={rem !== null && rem < 0 ? "font-semibold text-red-700" : "font-medium"}>
@@ -103,15 +97,13 @@ export function EventStatusFlag({ flag, onCreateClaim }: {
             )}
           </span>
 
-          {/* Clause */}
           <span className="text-muted-foreground">Clause</span>
           <span className="font-medium">
             SC {flag.clauseRef}
             {clause ? ` — ${clause.title}` : ""}
             {flag.basisClauses && flag.basisClauses.length > 0 && (
               <span className="text-muted-foreground">
-                {" "}
-                (basis: {flag.basisClauses.map((c) => `SC ${c}`).join(", ")})
+                {" "}(basis: {flag.basisClauses.map((c) => `SC ${c}`).join(", ")})
               </span>
             )}
           </span>
@@ -130,10 +122,26 @@ export function EventStatusFlag({ flag, onCreateClaim }: {
           </div>
         )}
 
-        {onCreateClaim && flag.status !== "awaiting" && (
-          <Button size="sm" className="mt-3 w-full" onClick={onCreateClaim}>
-            {flag.actionLabel?.toLowerCase().includes("claim") ? "Build the claim" : "Take action"}
-          </Button>
+        {/* SC 16.1 suspension remedy, when a payment cycle is overdue. */}
+        {flag.remedy && (
+          <div className="mt-3 rounded-md border border-dashed p-2 text-xs">
+            <div className="flex items-center gap-1.5 font-medium">
+              <Pause className="h-3.5 w-3.5" /> {flag.remedy.label}
+            </div>
+            <p className="mt-1 text-muted-foreground">{flag.remedy.description}</p>
+            {!flag.remedy.noticeGiven && flag.eventId && (
+              <div className="mt-2">
+                <StepCompleteControl eventId={flag.eventId} stepId="16.1-notice" label="Mark 16.1 notice given" />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Advance the chain: record that this step was done. */}
+        {flag.eventId && flag.stepId && doneLabel && flag.status !== "closed" && (
+          <div className="mt-3">
+            <StepCompleteControl eventId={flag.eventId} stepId={flag.stepId} label={doneLabel} />
+          </div>
         )}
       </PopoverContent>
     </Popover>

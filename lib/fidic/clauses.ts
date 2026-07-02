@@ -30,6 +30,7 @@ export type DeadlineAnchor =
   | "notice_date" // when our notice was served
   | "submission_date" // when we submitted particulars / a statement
   | "engineer_receipt_date" // when the Engineer received the claim / statement
+  | "suspension_notice_date" // when our 16.1 notice was given
   | "commencement_date"; // Commencement Date (from the contract data)
 
 /** A single time-barred step inside a clause's procedure. */
@@ -99,6 +100,28 @@ export const CLAUSES: Record<string, Clause> = {
         timeBarred: false,
         description:
           "The Engineer responds with approval or disapproval and detailed comments within 42 days of receiving the claim or further particulars (then proceeds under 3.5 to agree or determine).",
+        nextStepId: "3.5-determination",
+      },
+    ],
+  },
+
+  "3.5": {
+    ref: "3.5",
+    title: "Determinations",
+    kind: "procedure",
+    summary:
+      "Failing agreement, the Engineer makes a fair determination of the claim.",
+    steps: [
+      {
+        id: "3.5-determination",
+        label: "Await Engineer's determination",
+        party: "engineer",
+        kind: "response",
+        days: 42,
+        from: "engineer_receipt_date",
+        timeBarred: false,
+        description:
+          "Following the response, the Engineer proceeds under Sub-Clause 3.5 to agree or fairly determine the claim. Chase if unreasonably delayed. Mark done when the determination is received.",
       },
     ],
   },
@@ -197,7 +220,52 @@ export const CLAUSES: Record<string, Clause> = {
     kind: "payment",
     summary:
       "If payment is late, the Contractor is entitled to financing charges compounded monthly on the overdue amount.",
-    steps: [],
+    steps: [
+      {
+        id: "14.8-financing",
+        label: "Claim financing charges",
+        party: "contractor",
+        kind: "payment",
+        days: 0,
+        from: "engineer_receipt_date",
+        timeBarred: false,
+        description:
+          "Payment is overdue. Claim financing charges compounded monthly on the overdue amount under Sub-Clause 14.8. Include the calculation; rate = [INSERT, e.g. EIBOR + 3%].",
+      },
+    ],
+  },
+
+  "16.1": {
+    ref: "16.1",
+    title: "Contractor's Entitlement to Suspend Work",
+    kind: "administration",
+    summary:
+      "On non-certification (14.6) or non-payment (14.7), the Contractor may, after 21 days' notice, suspend or reduce the rate of work.",
+    steps: [
+      {
+        id: "16.1-notice",
+        label: "Give 21-day suspension notice",
+        party: "contractor",
+        kind: "notice",
+        days: 0,
+        from: "notice_date",
+        timeBarred: false,
+        description:
+          "You may give the Employer not less than 21 days' notice of intention to suspend work (or reduce the rate) under Sub-Clause 16.1, citing the non-certification / non-payment. This is a remedy, not a deadline.",
+        nextStepId: "16.1-suspend",
+      },
+      {
+        id: "16.1-suspend",
+        label: "Right to suspend matures",
+        party: "contractor",
+        kind: "notice",
+        days: 21,
+        from: "suspension_notice_date",
+        timeBarred: false,
+        description:
+          "21 days after your 16.1 notice, you may suspend or reduce the rate of work until payment/certification is remedied.",
+      },
+    ],
   },
 
   "1.3": {
@@ -281,3 +349,35 @@ export function getStep(stepId: string): ClauseStep | undefined {
 export function getClause(ref: string): Clause | undefined {
   return CLAUSES[ref];
 }
+
+/* ------------------------------------------------------------------ */
+/* Step completion — used by advanceEventStep + the "Mark done" UI.    */
+/* ------------------------------------------------------------------ */
+
+/** When a step is marked complete, which events column records the date. */
+export const STEP_DATE_FIELD: Record<string, string> = {
+  "20.1-notice": "notice_date",
+  "20.1-particulars": "submission_date",
+  "20.1-response": "engineer_receipt_date", // "Engineer responded on"
+  "14.6-ipc": "ipc_issued_date", // "IPC issued on"
+  "16.1-notice": "suspension_notice_date",
+};
+
+/** Completing one of these closes the event (no further action). */
+export const CLOSING_STEPS = new Set<string>([
+  "3.5-determination", // determination received
+  "14.7-payment", // paid
+  "14.8-financing", // financing charges claimed
+]);
+
+/** Short verb for the "Mark done" button, per step. */
+export const STEP_DONE_LABEL: Record<string, string> = {
+  "20.1-notice": "Mark notice served",
+  "20.1-particulars": "Mark claim submitted",
+  "20.1-response": "Mark Engineer responded",
+  "3.5-determination": "Mark determination received",
+  "14.6-ipc": "Mark IPC issued",
+  "14.7-payment": "Mark payment received",
+  "14.8-financing": "Mark financing charges claimed",
+  "16.1-notice": "Mark 16.1 notice given",
+};
