@@ -20,7 +20,7 @@ import {
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
-import { Sparkles, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Sparkles, AlertTriangle, CheckCircle2, Wand2 } from "lucide-react";
 
 const TYPES = [
   ["variation_change", "Variation / Change"], ["delay_eot", "Delay / EOT"],
@@ -102,6 +102,7 @@ export function ClaimBuilder({
   const [context, setContext] = useState<EventClaimContext | null>(null);
   const [loadingCtx, setLoadingCtx] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
+  const [analyzed, setAnalyzed] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [saving, startSave] = useTransition();
   const [saved, setSaved] = useState(false);
@@ -110,7 +111,10 @@ export function ClaimBuilder({
 
   const patch = (p: Partial<Draft>) => setDraft((d) => ({ ...d, ...p }));
   const amountNum = () => (draft.amount.trim() ? Number(draft.amount) : null);
-  const placeholders = (draft.generatedText?.match(/\[INSERT/gi) ?? []).length;
+  const placeholders = (draft.generatedText.match(/\[INSERT/gi) ?? []).length;
+
+  const arrivedViaAction = !!initialEventId;
+
   // Apply the deep-link (?event=&intent=) once it's known. Authoritative over
   // the persisted draft so "Action" from What's Next lands on the right event.
   const appliedLink = useRef<string | null>(null);
@@ -119,6 +123,7 @@ export function ClaimBuilder({
     const key = `${initialEventId}:${initialIntent ?? ""}`;
     if (appliedLink.current === key) return;
     appliedLink.current = key;
+    setAnalyzed(false);
     setDraft((d) => ({
       ...d,
       primaryEventId: initialEventId,
@@ -139,6 +144,11 @@ export function ClaimBuilder({
       .finally(() => { if (!cancelled) setLoadingCtx(false); });
     return () => { cancelled = true; };
   }, [draft.primaryEventId]);
+
+  function selectPrimary(id: string) {
+    setAnalyzed(false);
+    patch({ primaryEventId: id, extraEventIds: draft.extraEventIds.filter((x) => x !== id) });
+  }
 
   function modeString(): "notice" | "detailed" | "both" | null {
     if (draft.modeNotice && draft.modeDetailed) return "both";
@@ -173,14 +183,20 @@ export function ClaimBuilder({
     return hits.sort((a, b) => SEVERITY[b.kind] - SEVERITY[a.kind])[0];
   }
 
+  // The single chain behind both the "Analyze with AI" button and the "Action"
+  // deep-link: event in, filled form out. Requires an event.
   async function analyze() {
+    if (!draft.primaryEventId) {
+      setErr("Select the event this claim relates to before analyzing.");
+      return;
+    }
     setAnalyzing(true); setErr(null);
     try {
       const res = await fetch("/api/ai/claim/outline", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          description: draft.description, claim_type: draft.type,
-          relief_sought: draft.relief, amount: amountNum(),
+          event_id: draft.primaryEventId,
+          extra_event_ids: draft.extraEventIds,
         }),
       });
       if (!res.ok) throw new Error();
@@ -188,9 +204,17 @@ export function ClaimBuilder({
       const suggested: string[] = (data.relevant_event_ids ?? []).filter(
         (id: string) => id !== draft.primaryEventId,
       );
-      patch({ extraEventIds: suggested, keyPointsText: (data.key_points ?? []).join("\n") });
+      patch({
+        title: data.title || draft.title,
+        type: TYPES.some(([v]) => v === data.claim_type) ? data.claim_type : draft.type,
+        relief: RELIEF.some(([v]) => v === data.relief_sought) ? data.relief_sought : draft.relief,
+        description: data.description || draft.description,
+        keyPointsText: (data.key_points ?? []).join("\n"),
+        extraEventIds: suggested,
+      });
+      setAnalyzed(true);
     } catch {
-      setErr("Couldn’t analyze. You can select events and write key points manually.");
+      setErr("Couldn’t analyze. You can fill the fields in manually.");
     } finally { setAnalyzing(false); }
   }
 
@@ -261,15 +285,17 @@ export function ClaimBuilder({
 
   function startAnother() {
     clearDraft(); setDraft(EMPTY); setSaved(false); setContext(null);
-    appliedLink.current = null;
+    setAnalyzed(false); appliedLink.current = null;
   }
 
   const mode = modeString();
-  const showDetailedTools = draft.modeDetailed; // Analyze + key points + evidence
+  const showDetailedTools = draft.modeDetailed; // further evidence + key points
   const genLabel =
     mode === "both" ? "Generate notice + claim"
     : mode === "notice" ? "Generate notice"
     : "Generate claim";
+  // Analyze is "primed" until it has been run for the current event.
+  const analyzePrimed = !!draft.primaryEventId && !analyzed && !draft.generatedText;
 
   return (
     <Card>
@@ -300,15 +326,10 @@ export function ClaimBuilder({
           </p>
         </div>
 
-        {/* ---- Primary event (guards evaluate against this one) ---- */}
+        {/* ---- Primary event (guards + Analyze evaluate against this one) ---- */}
         <div className="space-y-1.5">
           <Label>Event this claim relates to</Label>
-          <Select
-            value={draft.primaryEventId ?? ""}
-            onValueChange={(v) =>
-              patch({ primaryEventId: v, extraEventIds: draft.extraEventIds.filter((x) => x !== v) })
-            }
-          >
+          <Select value={draft.primaryEventId ?? ""} onValueChange={selectPrimary}>
             <SelectTrigger><SelectValue placeholder="Select an event" /></SelectTrigger>
             <SelectContent>
               {events.map((ev) => (
@@ -338,6 +359,17 @@ export function ClaimBuilder({
           )}
         </div>
 
+        {/* ---- Primed hint: arrived here ready to analyze ---- */}
+        {analyzePrimed && (
+          <div className="flex items-start gap-2 rounded-md border border-dashed bg-muted/40 p-3 text-sm">
+            <Wand2 className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+            <span>
+              {arrivedViaAction ? "This event is ready. " : ""}
+              Click <strong>Analyze with AI</strong> to fill in the claim from the event and its evidence, then edit and generate.
+            </span>
+          </div>
+        )}
+
         {/* ---- Claim metadata ---- */}
         <div className="space-y-4">
           <div className="space-y-1.5">
@@ -360,18 +392,10 @@ export function ClaimBuilder({
                 onChange={(e) => patch({ amount: e.target.value })} placeholder="leave blank if unknown" /></div>
           </div>
           <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <Label htmlFor="c-desc">Description — what is this claim about?</Label>
-              {showDetailedTools && (
-                <Button type="button" size="sm" variant="secondary" onClick={analyze}
-                  disabled={draft.description.trim().length === 0 || analyzing}>
-                  <Sparkles className="mr-1 h-4 w-4" />{analyzing ? "Analyzing…" : "Analyze with AI"}
-                </Button>
-              )}
-            </div>
+            <Label htmlFor="c-desc">Description — what is this claim about?</Label>
             <Textarea id="c-desc" rows={4} value={draft.description}
               onChange={(e) => patch({ description: e.target.value })}
-              placeholder="e.g. The main contractor deducted AED 18,500 from PC07 for cleaning that was not our waste…" />
+              placeholder="Filled in by Analyze, or write your own — e.g. The main contractor deducted AED 18,500 from PC07 for cleaning that was not our waste…" />
           </div>
         </div>
 
@@ -415,15 +439,25 @@ export function ClaimBuilder({
               <Label htmlFor="c-points">Key points <span className="text-muted-foreground">(one per line — edit before generating)</span></Label>
               <Textarea id="c-points" rows={5} value={draft.keyPointsText}
                 onChange={(e) => patch({ keyPointsText: e.target.value })}
-                placeholder="Run Analyze to fill these from the description, or write your own." />
+                placeholder="Filled in by Analyze, or write your own." />
             </div>
           </>
         )}
 
-        {/* ---- Generate ---- */}
-        <Button type="button" onClick={onGenerateClick} disabled={!mode || generating}>
-          <Sparkles className="mr-1 h-4 w-4" />{generating ? "Generating…" : genLabel}
-        </Button>
+        {/* ---- Analyze + Generate ---- */}
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant={analyzePrimed ? "default" : "secondary"}
+            onClick={analyze}
+            disabled={analyzing || generating}
+          >
+            <Sparkles className="mr-1 h-4 w-4" />{analyzing ? "Analyzing…" : "Analyze with AI"}
+          </Button>
+          <Button type="button" onClick={onGenerateClick} disabled={!mode || generating}>
+            {generating ? "Generating…" : genLabel}
+          </Button>
+        </div>
 
         {/* ---- The document ---- */}
         <div className="space-y-1.5">
