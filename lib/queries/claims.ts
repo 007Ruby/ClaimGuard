@@ -6,7 +6,9 @@ export async function listClaims() {
   const supabase = await createClient();
   const { data } = await supabase
     .from("claims")
-    .select("id, title, type, status, relief_sought, amount, currency, description, body, created_at, claim_events(event:events(id, title))")
+    .select(
+      "id, title, kind, type, status, relief_sought, amount, currency, description, body, created_at, primary_event_id, claim_events(event:events(id, title))",
+    )
     .eq("project_id", projectId)
     .order("created_at", { ascending: false });
   return data ?? [];

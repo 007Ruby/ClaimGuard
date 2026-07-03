@@ -12,6 +12,7 @@ export interface WhatsNextItem {
   eventId: string;
   eventTitle: string;
   status: Exclude<EventStatus, "no_action" | "closed">;
+  stepId: string | null;
   actionLabel: string;
   actionDescription: string;
   actionDueDate: string | null;
@@ -24,6 +25,13 @@ const ACCENT: Record<WhatsNextItem["status"], string> = {
   overdue: "border-l-red-500",
   action_needed: "border-l-amber-500",
   awaiting: "border-l-blue-400",
+};
+
+// Claim-creation steps deep-link into the Claims builder (with the mode
+// pre-selected) instead of the event dialog. Everything else opens the event.
+const CLAIM_STEP_INTENT: Record<string, "notice" | "detailed"> = {
+  "20.1-notice": "notice",
+  "20.1-particulars": "detailed",
 };
 
 function daysRemaining(iso: string | null): number | null {
@@ -49,6 +57,11 @@ export function ObligationItem({ item }: { item: WhatsNextItem }) {
   const rem = daysRemaining(item.actionDueDate);
   const clause = item.clauseRef ? CLAUSES[item.clauseRef] : undefined;
   const isOurs = item.status !== "awaiting";
+
+  const intent = item.stepId ? CLAIM_STEP_INTENT[item.stepId] : undefined;
+  const href = intent
+    ? `/claims?event=${item.eventId}&intent=${intent}`
+    : `/events?open=${item.eventId}`;
 
   return (
     <Card className={`border-l-4 p-4 ${ACCENT[item.status]}`}>
@@ -91,10 +104,10 @@ export function ObligationItem({ item }: { item: WhatsNextItem }) {
           </div>
         </div>
 
-        {/* Deep-link to the event's home page with the dialog open (?open=id). */}
+        {/* Claim steps -> Claims builder; other steps -> event dialog (?open=id). */}
         <div className="flex shrink-0 flex-col gap-2">
           <Button asChild size="sm" variant={item.status === "overdue" ? "default" : "outline"}>
-            <Link href={`/events?open=${item.eventId}`}>
+            <Link href={href}>
               {isOurs ? "Action" : "View"}
             </Link>
           </Button>

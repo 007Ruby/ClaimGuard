@@ -130,6 +130,7 @@ export async function loadWhatsNext(): Promise<WhatsNextItem[]> {
     items.push({
       eventId: row.id, eventTitle: row.title ?? "(untitled event)",
       status: flag.status as WhatsNextItem["status"],
+      stepId: flag.stepId ?? null,
       actionLabel: flag.actionLabel ?? "", actionDescription: flag.actionDescription ?? "",
       actionDueDate: flag.actionDueDate ?? null, clauseRef: flag.clauseRef ?? null,
       basisClauses: flag.basisClauses ?? [], timeBarred: flag.timeBarred ?? false,

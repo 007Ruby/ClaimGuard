@@ -14,13 +14,31 @@ export function usePersistentState<T>(
 
   // Restore after mount (only when asked to) → avoids the hydration mismatch.
   useEffect(() => {
-    if (!restore) return;
-    try {
-      const raw = localStorage.getItem(key);
-      if (raw !== null) setState(JSON.parse(raw) as T);
-    } catch {}
-    setReady(true);
-  }, [key, restore]);
+  if (!restore) return;
+
+  try {
+    const raw = localStorage.getItem(key);
+
+    if (raw !== null) {
+      const saved = JSON.parse(raw);
+
+      if (
+        typeof initial === "object" &&
+        initial !== null &&
+        !Array.isArray(initial)
+      ) {
+        setState({
+          ...(initial as object),
+          ...(saved as object),
+        } as T);
+      } else {
+        setState(saved as T);
+      }
+    }
+  } catch {}
+
+  setReady(true);
+}, [key, restore, initial]);
 
   useEffect(() => {
     if (!persist || !ready) return;
