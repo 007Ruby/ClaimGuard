@@ -3,20 +3,21 @@
  * ---------------------------------------------------------------------------
  * Deterministic status + deadline engine.
  *
- * Given an event (its category and the dates we know about it), this resolves
- * the CURRENT obligation, its deadline, its contract clause and the event's
- * status flag. No AI here — only the contract's fixed time bars. The AI layer
- * supplies the precise `clauseRef`/wording and writes them onto the event;
- * this engine then schedules and ages the deadlines.
+ * Given an event's dates and amounts, this resolves the CURRENT obligation,
+ * its deadline, its clause and the event's status flag. No AI here.
+ *
+ * Step position is DERIVED: the engine walks the clause chain and returns the
+ * first step whose `satisfiedBy` rule is not met. There is no stored pointer,
+ * so a stale or cross-chain step id can no longer silently close an event.
  * ---------------------------------------------------------------------------
  */
 
 import {
   CATEGORY_ROUTES,
-  CLAUSES,
   getStep,
   type ClauseStep,
   type DeadlineAnchor,
+  type TimelineDateField,
 } from "./clauses";
 
 export type EventStatus =
@@ -26,70 +27,98 @@ export type EventStatus =
   | "overdue"
   | "closed";
 
-/** The dates the engine reasons over. All optional except awareness/event date. */
+export type Urgency = "critical" | "soon" | "ok" | "none";
+
+/** The facts the engine reasons over. One field per real-world event. */
 export interface EventTimeline {
-  type: string; // variation | delay | payment | instruction | site_issue | other
-  awarenessDate: string; // ISO — when aware of the event (defaults to event date)
-  noticeDate?: string | null; // when our 20.1 notice was served
-  submissionDate?: string | null; // when particulars / Statement submitted
-  engineerReceiptDate?: string | null; // when Engineer received the claim / statement
-  /** id of the step we have already completed (e.g. "20.1-notice"). */
-  lastCompletedStepId?: string | null;
-  /** when our 16.1 suspension notice was given. */
-  suspensionNoticeDate?: string | null;
-  /** explicitly closed by the user (claim determined / no further action). */
+  type: string;
+  /** ISO — when aware of the event. Defaults to the event date. */
+  awarenessDate: string;
+
+  /* Claim chain */
+  noticeDate?: string | null; // our 20.1 notice served
+  submissionDate?: string | null; // our particulars / Statement sent
+  engineerReceiptDate?: string | null; // Engineer RECEIVED it (anchor only)
+  engineerResponseDate?: string | null; // Engineer's 20.1 response received
+  determinationDate?: string | null; // 3.5 determination received
+
+  /* Payment chain */
+  ipcIssuedDate?: string | null; // IPC issued (satisfies 14.6)
+  certifiedAmount?: number | null; // sum certified in the IPC
+  paymentReceivedDate?: string | null; // money landed
+  amountReceived?: number | null; // what actually landed
+
+  /* Remedies */
+  suspensionNoticeDate?: string | null; // our 16.1 notice
+
+  /** Explicitly closed by the user (withdrawn / superseded / settled). */
   closed?: boolean;
 }
 
-/** A secondary remedy (e.g. SC 16.1 suspension) surfaced alongside the flag. */
 export interface Remedy {
   clauseRef: string;
   label: string;
   description: string;
+  /** Has the prerequisite notice been given? (16.1 only.) */
   noticeGiven: boolean;
-  availableFrom?: string; // ISO, once the 16.1 notice starts the 21-day clock
+  /** ISO — when the right becomes exercisable. */
+  availableFrom?: string;
+  /**
+   * True where a 16.1 notice was given BEFORE any 14.6/14.7 default existed.
+   * A premature notice is invalid; suspending on it puts you in breach.
+   */
+  premature?: boolean;
+  /** Amount the remedy bites on (14.8 accrues on the outstanding balance). */
+  amount?: number;
+  /** ISO — when the underlying default arose. */
+  accruesFrom?: string;
 }
 
-/** Loaded from the project contract data; only what the engine needs. */
 export interface ContractContext {
-  commencementDate: string; // ISO
-  /** Per-clause day overrides if the Particular Conditions change a default. */
-  dayOverrides?: Record<string, number>; // e.g. { "14.7-payment": 56 }
+  commencementDate: string;
+  /** Per-step day overrides from the Particular Conditions. */
+  dayOverrides?: Record<string, number>;
 }
 
 export interface Obligation {
   stepId: string;
   label: string;
-  clauseRef: string; // the procedural clause that owns the step
-  basisClauses: string[]; // entitlement clauses to cite in the action / claim
+  clauseRef: string;
+  basisClauses: string[];
   party: ClauseStep["party"];
   description: string;
-  dueDate: string; // ISO
-  daysRemaining: number; // negative once overdue
+  /** ISO, or "" where no anchor exists yet. */
+  dueDate: string;
+  /** Negative once past the due date. Null where there is no anchor. */
+  daysRemaining: number | null;
   timeBarred: boolean;
+  /** Indicative period only — never presented as a breach. */
+  nominal: boolean;
   status: EventStatus;
-  remedy?: Remedy; // e.g. SC 16.1 suspension, when a payment cycle is overdue
+  urgency: Urgency;
+  /** Outstanding balance on a payment event, where amounts are known. */
+  outstandingAmount?: number;
+  /** Consequences that attach while this step is in default. */
+  remedies: Remedy[];
 }
 
 const DAY_MS = 86_400_000;
 
 function addDays(iso: string, days: number): string {
-  const d = new Date(iso);
+  const d = new Date(iso + "T00:00:00.000Z");
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
 
-function daysBetweenTodayAnd(iso: string, today: Date): number {
-  const due = new Date(iso + "T00:00:00.000Z").getTime();
-  const now = Date.UTC(
-    today.getUTCFullYear(),
-    today.getUTCMonth(),
-    today.getUTCDate(),
-  );
-  return Math.round((due - now) / DAY_MS);
+function toUtcMidnight(d: Date): number {
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
 }
 
-/** Resolve the anchor date for a step from the timeline + contract. */
+function daysBetweenTodayAnd(iso: string, today: Date): number {
+  const due = new Date(iso + "T00:00:00.000Z").getTime();
+  return Math.round((due - toUtcMidnight(today)) / DAY_MS);
+}
+
 function anchorDate(
   anchor: DeadlineAnchor,
   tl: EventTimeline,
@@ -102,8 +131,12 @@ function anchorDate(
       return tl.noticeDate ?? null;
     case "submission_date":
       return tl.submissionDate ?? null;
+    // Receipt is the true anchor; fall back to despatch where receipt is not
+    // evidenced, since the other side will not concede a later date for free.
     case "engineer_receipt_date":
       return tl.engineerReceiptDate ?? tl.submissionDate ?? null;
+    case "engineer_response_date":
+      return tl.engineerResponseDate ?? null;
     case "suspension_notice_date":
       return tl.suspensionNoticeDate ?? null;
     case "commencement_date":
@@ -111,60 +144,193 @@ function anchorDate(
   }
 }
 
-/** Walk the clause chain to find the first step that is not yet completed. */
-function nextOpenStep(
-  entryStepId: string,
-  lastCompletedStepId: string | null | undefined,
-): ClauseStep | undefined {
-  let step = getStep(entryStepId);
-  // advance past everything already completed
-  if (lastCompletedStepId) {
-    while (step && step.id !== lastCompletedStepId && step.nextStepId) {
-      step = getStep(step.nextStepId);
-    }
-    // if we landed on the completed step, move to the one after it
-    if (step && step.id === lastCompletedStepId) {
-      step = step.nextStepId ? getStep(step.nextStepId) : undefined;
-    }
+function dateField(
+  tl: EventTimeline,
+  field: TimelineDateField,
+): string | null | undefined {
+  return tl[field];
+}
+
+/** Outstanding balance, or null where amounts are unknown. */
+export function outstanding(tl: EventTimeline): number | null {
+  if (tl.certifiedAmount == null) return null;
+  return Math.max(0, tl.certifiedAmount - (tl.amountReceived ?? 0));
+}
+
+/** Is this step proved complete by the facts on the event? */
+export function isSatisfied(step: ClauseStep, tl: EventTimeline): boolean {
+  const rule = step.satisfiedBy;
+  if (rule.kind === "date") {
+    return !!dateField(tl, rule.field);
   }
-  return step;
+  // Payment: money must have landed AND cover the certified sum. Where no
+  // certified amount is recorded we cannot test the shortfall, so a payment
+  // date alone discharges it.
+  if (!tl.paymentReceivedDate) return false;
+  const bal = outstanding(tl);
+  return bal === null || bal === 0;
 }
 
 /**
- * The core call. Returns the single current obligation for an event, or null
- * when the category creates no automatic obligation (status -> no_action).
+ * Walk the chain from the route entry and return the first unsatisfied step.
+ * Returns null when every step is satisfied — the only route to `closed`.
  */
+function nextOpenStep(
+  entryStepId: string,
+  tl: EventTimeline,
+): ClauseStep | null {
+  const seen = new Set<string>();
+  let step = getStep(entryStepId);
+  while (step && !seen.has(step.id)) {
+    seen.add(step.id);
+    if (!isSatisfied(step, tl)) return step;
+    if (!step.nextStepId) return null; // terminal step satisfied -> closed
+    step = getStep(step.nextStepId);
+  }
+  return null;
+}
+
+function stepDue(
+  step: ClauseStep,
+  tl: EventTimeline,
+  contract: ContractContext,
+): string {
+  const days = contract.dayOverrides?.[step.id] ?? step.days;
+  // A null period means the clause fixes no deadline — surface the step as an
+  // action with no clock rather than inventing one.
+  if (days === null) return "";
+  const anchorIso = anchorDate(step.from, tl, contract);
+  if (!anchorIso) return "";
+  return addDays(anchorIso, days);
+}
+
+/* ------------------------------------------------------------------ */
+/* Remedies: 14.8 financing charges and 16.1 suspension.               */
+/*                                                                     */
+/* These are NOT chain steps. They are consequences that attach while  */
+/* 14.6 or 14.7 is in default, and they fall away when it is remedied. */
+/* ------------------------------------------------------------------ */
+
+function paymentRemedies(
+  tl: EventTimeline,
+  contract: ContractContext,
+  today: Date,
+): Remedy[] {
+  if (tl.type !== "payment") return [];
+
+  const ipcStep = getStep("14.6-ipc");
+  const payStep = getStep("14.7-payment");
+  if (!ipcStep || !payStep) return [];
+
+  const ipcDue = stepDue(ipcStep, tl, contract);
+  const payDue = stepDue(payStep, tl, contract);
+
+  // 14.6 default: the certifying deadline passed with no IPC issued.
+  const ipcDefault =
+    !!ipcDue && !tl.ipcIssuedDate && daysBetweenTodayAnd(ipcDue, today) < 0;
+  // 14.7 default: the payment deadline passed without the certified sum.
+  const payDefault =
+    !!payDue &&
+    !isSatisfied(payStep, tl) &&
+    daysBetweenTodayAnd(payDue, today) < 0;
+
+  if (!ipcDefault && !payDefault) return [];
+
+  // The earliest default is what a 16.1 notice may be founded on.
+  const defaultDates = [
+    ipcDefault ? ipcDue : null,
+    payDefault ? payDue : null,
+  ].filter((d): d is string => !!d);
+  const defaultArose = defaultDates.sort()[0];
+
+  const remedies: Remedy[] = [];
+  const bal = outstanding(tl);
+
+  if (payDefault) {
+    remedies.push({
+      clauseRef: "14.8",
+      label: "Financing charges accruing (SC 14.8)",
+      description:
+        bal != null
+          ? `Payment fell due on ${payDue}. Financing charges accrue, compounded monthly, on the outstanding ${bal.toLocaleString()} under Sub-Clause 14.8. No notice is required for the entitlement to arise. Rate = [INSERT, e.g. EIBOR + 3%].`
+          : `Payment fell due on ${payDue}. Financing charges accrue, compounded monthly, on the overdue amount under Sub-Clause 14.8. No notice is required for the entitlement to arise. Rate = [INSERT]. Outstanding balance = [INSERT].`,
+      noticeGiven: true, // 14.8 needs none
+      amount: bal ?? undefined,
+      accruesFrom: payDue,
+    });
+  }
+
+  // 16.1: only meaningful once a default exists, and only valid if the notice
+  // was given ON OR AFTER the default arose.
+  if (tl.suspensionNoticeDate) {
+    const premature = tl.suspensionNoticeDate < defaultArose;
+    remedies.push({
+      clauseRef: "16.1",
+      label: premature
+        ? "Suspension notice premature (SC 16.1)"
+        : "Suspension right maturing (SC 16.1)",
+      description: premature
+        ? `Your 16.1 notice is dated ${tl.suspensionNoticeDate}, but no failure to certify or pay had arisen until ${defaultArose}. A notice given before the default is invalid — suspending on it would put you in breach. Re-serve it dated on or after ${defaultArose}.`
+        : `You gave 21 days' notice on ${tl.suspensionNoticeDate}, founded on the failure arising ${defaultArose}. You may suspend or reduce the rate of work from ${addDays(tl.suspensionNoticeDate, 21)} until payment/certification is remedied.`,
+      noticeGiven: true,
+      premature,
+      availableFrom: premature
+        ? undefined
+        : addDays(tl.suspensionNoticeDate, 21),
+      accruesFrom: defaultArose,
+    });
+  } else {
+    remedies.push({
+      clauseRef: "16.1",
+      label: "Suspension available (SC 16.1)",
+      description: `A failure to ${ipcDefault ? "certify (SC 14.6)" : "pay (SC 14.7)"} arose on ${defaultArose}. You may give the Employer not less than 21 days' notice under Sub-Clause 16.1, then suspend or reduce the rate of work until it is remedied.`,
+      noticeGiven: false,
+      accruesFrom: defaultArose,
+    });
+  }
+
+  return remedies;
+}
+
+/* ------------------------------------------------------------------ */
+/* Core resolution                                                     */
+/* ------------------------------------------------------------------ */
+
 export function resolveObligation(
   tl: EventTimeline,
   contract: ContractContext,
   today: Date = new Date(),
 ): Obligation | null {
-  if (tl.closed) {
-    return closedObligation(tl);
-  }
-
   const route = CATEGORY_ROUTES[tl.type];
   if (!route) return null; // "other" / unmapped -> no_action
 
-  const step = nextOpenStep(route.entryStepId, tl.lastCompletedStepId);
-  if (!step) return closedObligation(tl); // chain exhausted
+  if (tl.closed) return closedObligation("Closed by user.");
 
-  const anchorIso = anchorDate(step.from, tl, contract);
-  // If we cannot anchor a date yet (e.g. notice not served), surface the step
-  // as action_needed with no firm deadline rather than guessing one.
-  const days = contract.dayOverrides?.[step.id] ?? step.days;
-  const dueDate = anchorIso ? addDays(anchorIso, days) : "";
-  const daysRemaining = dueDate ? daysBetweenTodayAnd(dueDate, today) : days;
-
-  const isOurStep = step.party === "contractor";
-  let status: EventStatus;
-  if (!isOurStep) {
-    status = "awaiting"; // waiting on Engineer/Employer to respond / certify / pay
-  } else if (dueDate && daysRemaining < 0) {
-    status = "overdue";
-  } else {
-    status = "action_needed";
+  const step = nextOpenStep(route.entryStepId, tl);
+  if (!step) {
+    return closedObligation(
+      tl.type === "payment"
+        ? "Certified sum received in full. No further contractual action outstanding."
+        : "Determination received. No further contractual action outstanding.",
+    );
   }
+
+  const dueDate = stepDue(step, tl, contract);
+  const daysRemaining = dueDate ? daysBetweenTodayAnd(dueDate, today) : null;
+  const late = daysRemaining !== null && daysRemaining < 0;
+
+  // The flag reflects WHO must act. A counterparty blowing their deadline
+  // stays `awaiting` — we cannot mark them overdue on our own event — but the
+  // urgency goes critical so it surfaces at the top of What's Next.
+  const ours = step.party === "contractor";
+  const status: EventStatus = ours
+    ? late && !step.nominal
+      ? "overdue"
+      : "action_needed"
+    : "awaiting";
+
+  const remedies = paymentRemedies(tl, contract, today);
+  const bal = outstanding(tl);
 
   const obligation: Obligation = {
     stepId: step.id,
@@ -176,89 +342,55 @@ export function resolveObligation(
     dueDate,
     daysRemaining,
     timeBarred: step.timeBarred,
+    nominal: step.nominal,
     status,
+    urgency: "ok",
+    outstandingAmount: bal ?? undefined,
+    remedies,
   };
-
-  // Payment-overdue consequences: when the Engineer is late certifying (14.6)
-  // or the Employer is late paying (14.7), surface the Contractor's remedies.
-  if (
-    tl.type === "payment" &&
-    dueDate &&
-    daysRemaining < 0 &&
-    (step.id === "14.6-ipc" || step.id === "14.7-payment")
-  ) {
-    const remedy = suspensionRemedy(tl); // SC 16.1
-    if (step.id === "14.7-payment") {
-      // Employer late paying -> financing charges become a live action (14.8).
-      const fin = getStep("14.8-financing");
-      return {
-        stepId: "14.8-financing",
-        label: fin?.label ?? "Claim financing charges",
-        clauseRef: "14.8",
-        basisClauses: ["14.7"],
-        party: "contractor",
-        description: fin?.description ?? "Claim financing charges under SC 14.8.",
-        dueDate: "",
-        daysRemaining, // how many days payment is overdue
-        timeBarred: false,
-        status: "action_needed",
-        remedy,
-      };
-    }
-    // 14.6 late certification -> keep awaiting, attach the remedy.
-    return { ...obligation, remedy };
-  }
-
+  obligation.urgency = urgency(obligation);
   return obligation;
 }
 
-/** SC 16.1: the suspension remedy available once a payment cycle is overdue. */
-function suspensionRemedy(tl: EventTimeline): Remedy {
-  const noticeGiven = !!tl.suspensionNoticeDate;
-  const availableFrom = noticeGiven
-    ? addDays(tl.suspensionNoticeDate as string, 21)
-    : undefined;
+function closedObligation(description: string): Obligation {
   return {
-    clauseRef: "16.1",
-    label: noticeGiven ? "Suspension right maturing (SC 16.1)" : "Suspension available (SC 16.1)",
-    description: noticeGiven
-      ? `You gave 21-day notice on ${tl.suspensionNoticeDate}. You may suspend or reduce the rate of work from ${availableFrom} until payment/certification is remedied.`
-      : "You may give the Employer not less than 21 days' notice under Sub-Clause 16.1, then suspend or reduce the rate of work until payment/certification is remedied.",
-    noticeGiven,
-    availableFrom,
-  };
-}
-
-function closedObligation(tl: EventTimeline): Obligation {
-  return {
-    stepId: tl.lastCompletedStepId ?? "closed",
+    stepId: "closed",
     label: "Closed",
     clauseRef: "",
     basisClauses: [],
     party: "contractor",
-    description: "No further contractual action outstanding.",
+    description,
     dueDate: "",
-    daysRemaining: 0,
+    daysRemaining: null,
     timeBarred: false,
+    nominal: false,
     status: "closed",
+    urgency: "none",
+    remedies: [],
   };
 }
 
 /** Urgency bucket for sorting / colouring What's Next and the flag. */
-export function urgency(o: Obligation): "critical" | "soon" | "ok" | "none" {
-  if (o.status === "overdue") return "critical";
+export function urgency(o: Obligation): Urgency {
   if (o.status === "no_action" || o.status === "closed") return "none";
+  if (o.status === "overdue") return "critical";
+
+  const days = o.daysRemaining;
+
   if (o.status === "awaiting") {
-    // The other party (Engineer/Employer) is past their response deadline:
-    // surface it so the Contractor can chase and preserve rights (14.8 / 16.1).
-    return o.daysRemaining < 0 ? "soon" : "ok";
+    if (days === null || days >= 0) return "ok";
+    // A nominal period carries no breach, so a late determination is a chase,
+    // never a red flag. A blown 14.6/14.7 or 20.1 response is critical.
+    return o.nominal ? "soon" : "critical";
   }
-  if (o.timeBarred && o.daysRemaining <= 7) return "critical";
-  if (o.daysRemaining <= 7) return "soon";
+
+  // action_needed
+  if (days === null) return "soon"; // no anchor yet — needs attention to start the clock
+  if (o.timeBarred && days <= 7) return "critical";
+  if (days <= 7) return "soon";
   return "ok";
 }
 
-/** Human label for the flag + What's Next badge. */
 export const STATUS_LABEL: Record<EventStatus, string> = {
   no_action: "No action",
   action_needed: "Action needed",

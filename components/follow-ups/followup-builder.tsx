@@ -17,7 +17,10 @@ import { Sparkles, Wand2, Copy, Check, AlertTriangle } from "lucide-react";
 type AwaitingEvent = {
   id: string; title: string; type: string | null; occurred_on: string | null;
   stepId: string | null; actionLabel: string | null; actionParty: string | null;
-  actionDueDate: string | null; clauseRef: string | null; basisClauses: string[];
+  actionDueDate: string | null; clauseRef: string | null; basisClauses: string[];  urgency: "critical" | "soon" | "ok" | "none";
+  nominal: boolean;
+  remedies: { clauseRef: string; label: string; description: string; premature?: boolean; availableFrom?: string; accruesFrom?: string }[];
+  outstandingAmount: number | null;
 };
 
 type Draft = {
@@ -60,7 +63,11 @@ export function FollowUpBuilder({
   const selected = events.find((e) => e.id === draft.eventId) ?? null;
   const party = partyLabel(selected?.actionParty);
   const rem = selected ? daysRemaining(selected.actionDueDate) : null;
-  const overdue = rem !== null && rem < 0;
+  // Urgency already encodes "someone has blown a real deadline", including the
+  // 14.7 payment default. A nominal 3.5 period never reaches critical, so the
+  // soft popup correctly still fires on a slow determination.
+  const overdue = selected?.urgency === "critical";
+  const premature16 = selected?.remedies.find((r) => r.premature) ?? null;
 
   const arrivedViaAction = !!initialEventId;
   const analyzePrimed = !!draft.eventId && !analyzed && !draft.emailText;
@@ -98,7 +105,9 @@ export function FollowUpBuilder({
         body: JSON.stringify({
           event_id: selected.id, party: selected.actionParty,
           action_label: selected.actionLabel, clause_ref: selected.clauseRef,
-          due_date: selected.actionDueDate, days: rem,
+          due_date: selected.actionDueDate, days: rem, nominal: selected.nominal,
+           remedies: selected.remedies.map((r) => ({ clause: r.clauseRef, text: r.description })),
+          outstanding: selected.outstandingAmount,
         }),
       });
       if (!res.ok) throw new Error();
@@ -137,9 +146,11 @@ export function FollowUpBuilder({
         body: JSON.stringify({
           event_id: selected.id, party: selected.actionParty, recipient: draft.recipient,
           action_label: selected.actionLabel, clause_ref: selected.clauseRef,
-          due_date: selected.actionDueDate, days: rem,
+          due_date: selected.actionDueDate, days: rem, nominal: selected.nominal,
           subject: draft.subject,
           key_points: draft.keyPointsText.split("\n").map((s) => s.trim()).filter(Boolean),
+           remedies: selected.remedies.map((r) => ({ clause: r.clauseRef, text: r.description })),
+          outstanding: selected.outstandingAmount,
         }),
       });
       if (!res.ok) throw new Error();
@@ -198,6 +209,14 @@ export function FollowUpBuilder({
               )}
             </p>
           )}
+          {premature16 && (
+  <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+    <span>
+      <strong>Your SC 16.1 notice is invalid.</strong> {premature16.description}
+    </span>
+  </div>
+)}
         </div>
 
         {/* ---- Primed hint ---- */}

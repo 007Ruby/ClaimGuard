@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/popover";
 import { AlertTriangle, Clock, CheckCircle2, CircleDashed, Pause } from "lucide-react";
 import { CLAUSES, STEP_DONE_LABEL } from "@/lib/fidic/clauses";
-import { STATUS_LABEL, type EventStatus, type Remedy } from "@/lib/fidic/engine";
+import { STATUS_LABEL, type EventStatus, type Remedy, type Urgency } from "@/lib/fidic/engine";
 import { StepCompleteControl } from "@/components/events/step-complete-control";
 
 const STYLES: Record<
@@ -33,7 +33,11 @@ export interface EventFlag {
   clauseRef?: string | null;
   basisClauses?: string[] | null;
   timeBarred?: boolean | null;
-  remedy?: Remedy | null;
+  remedies?: Remedy[];
+  urgency?: Urgency;
+  nominal?: boolean;
+  daysRemaining?: number | null;
+  outstandingAmount?: number | null;
 }
 
 function fmt(iso?: string | null) {
@@ -123,19 +127,22 @@ export function EventStatusFlag({ flag }: { flag: EventFlag }) {
         )}
 
         {/* SC 16.1 suspension remedy, when a payment cycle is overdue. */}
-        {flag.remedy && (
-          <div className="mt-3 rounded-md border border-dashed p-2 text-xs">
-            <div className="flex items-center gap-1.5 font-medium">
-              <Pause className="h-3.5 w-3.5" /> {flag.remedy.label}
-            </div>
-            <p className="mt-1 text-muted-foreground">{flag.remedy.description}</p>
-            {!flag.remedy.noticeGiven && flag.eventId && (
-              <div className="mt-2">
-                <StepCompleteControl eventId={flag.eventId} stepId="16.1-notice" label="Mark 16.1 notice given" />
-              </div>
-            )}
-          </div>
-        )}
+        {(flag.remedies ?? []).map((r) => (
+  <div key={r.clauseRef} className="mt-3 rounded-md border border-dashed p-2 text-xs">
+    <div className="flex items-center gap-1.5 font-medium">
+      {r.premature
+        ? <AlertTriangle className="h-3.5 w-3.5 text-red-600" />
+        : <Pause className="h-3.5 w-3.5" />}
+      {r.label}
+    </div>
+    <p className="mt-1 text-muted-foreground">{r.description}</p>
+    {r.clauseRef === "16.1" && !r.noticeGiven && flag.eventId && (
+      <div className="mt-2">
+        <StepCompleteControl eventId={flag.eventId} stepId="16.1-notice" label="Mark 16.1 notice given" />
+      </div>
+    )}
+  </div>
+))}
 
         {/* Advance the chain: record that this step was done. */}
         {flag.eventId && flag.stepId && doneLabel && flag.status !== "closed" && (

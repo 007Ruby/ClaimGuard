@@ -6,8 +6,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle } from "lucide-react";
 import { CLAUSES } from "@/lib/fidic/clauses";
-import { STATUS_LABEL, type EventStatus } from "@/lib/fidic/engine";
-
+import { STATUS_LABEL, type EventStatus, type Remedy, type Urgency } from "@/lib/fidic/engine";
 export interface WhatsNextItem {
   eventId: string;
   eventTitle: string;
@@ -19,13 +18,19 @@ export interface WhatsNextItem {
   clauseRef: string | null;
   basisClauses: string[];
   timeBarred: boolean;
+  urgency: "critical" | "soon" | "ok" | "none";
+  nominal: boolean;
+  remedies: { clauseRef: string; label: string; premature?: boolean }[];
+  outstandingAmount: number | null;
 }
 
-const ACCENT: Record<WhatsNextItem["status"], string> = {
-  overdue: "border-l-red-500",
-  action_needed: "border-l-amber-500",
-  awaiting: "border-l-blue-400",
+const ACCENT: Record<WhatsNextItem["urgency"], string> = {
+  critical: "border-l-red-500",
+  soon: "border-l-amber-500",
+  ok: "border-l-blue-400",
+  none: "border-l-muted",
 };
+
 
 // Claim-creation steps deep-link into the Claims builder (mode pre-selected).
 const CLAIM_STEP_INTENT: Record<string, "notice" | "detailed"> = {
@@ -41,6 +46,7 @@ const FOLLOWUP_STEPS = new Set([
   "14.6-ipc",
   "14.7-payment",
 ]);
+
 
 function daysRemaining(iso: string | null): number | null {
   if (!iso) return null;
@@ -73,11 +79,17 @@ export function ObligationItem({ item }: { item: WhatsNextItem }) {
     : isFollowup
       ? `/follow-ups?event=${item.eventId}`
       : `/events?open=${item.eventId}`;
-
-  const label = intent ? "Action" : isFollowup ? "Follow up" : item.status === "awaiting" ? "View" : "Action";
-
+  <Button asChild size="sm" variant={item.urgency === "critical" ? "default" : "outline"}></Button>
+  const chasingPayment = item.remedies.some((r) => r.clauseRef === "14.8");
+  const label = intent
+    ? "Action"
+    : chasingPayment
+      ? "Chase payment"
+      : isFollowup
+        ? "Follow up"
+        : item.status === "awaiting" ? "View" : "Action";
   return (
-    <Card className={`border-l-4 p-4 ${ACCENT[item.status]}`}>
+    <Card className={`border-l-4 p-4 ${ACCENT[item.urgency]}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -109,11 +121,20 @@ export function ObligationItem({ item }: { item: WhatsNextItem }) {
             <span>
               By <strong className="text-foreground">{fmt(item.actionDueDate)}</strong>
               {rem !== null && (
-                <span className={rem < 0 ? "ml-1 font-semibold text-red-600" : "ml-1"}>
-                  {rem < 0 ? `· ${Math.abs(rem)}d overdue` : `· ${rem}d left`}
-                </span>
-              )}
+  <span className={rem < 0 && !item.nominal ? "ml-1 font-semibold text-red-600" : "ml-1"}>
+    {rem < 0
+      ? item.nominal
+        ? `· ${Math.abs(rem)}d elapsed`
+        : `· ${Math.abs(rem)}d overdue`
+      : `· ${rem}d left`}
+  </span>
+)}
             </span>
+            {item.outstandingAmount != null && item.outstandingAmount > 0 && (
+  <span className="font-semibold text-foreground">
+    {item.outstandingAmount.toLocaleString()} outstanding
+  </span>
+)}
           </div>
         </div>
 
