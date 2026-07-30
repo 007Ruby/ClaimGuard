@@ -11,10 +11,10 @@
  * so a stale or cross-chain step id can no longer silently close an event.
  * ---------------------------------------------------------------------------
  */
-
 import {
   CATEGORY_ROUTES,
   getStep,
+  resolveDays,
   type ClauseStep,
   type DeadlineAnchor,
   type TimelineDateField,
@@ -109,6 +109,7 @@ function addDays(iso: string, days: number): string {
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
+
 
 function toUtcMidnight(d: Date): number {
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
@@ -212,11 +213,14 @@ function stepDue(
 /* ------------------------------------------------------------------ */
 
 function paymentRemedies(
+  
   tl: EventTimeline,
   contract: ContractContext,
   today: Date,
 ): Remedy[] {
   if (tl.type !== "payment") return [];
+
+  const suspensionDays = resolveDays("16.1-notice", contract.dayOverrides) ?? 21;
 
   const ipcStep = getStep("14.6-ipc");
   const payStep = getStep("14.7-payment");
@@ -271,19 +275,19 @@ function paymentRemedies(
         : "Suspension right maturing (SC 16.1)",
       description: premature
         ? `Your 16.1 notice is dated ${tl.suspensionNoticeDate}, but no failure to certify or pay had arisen until ${defaultArose}. A notice given before the default is invalid — suspending on it would put you in breach. Re-serve it dated on or after ${defaultArose}.`
-        : `You gave 21 days' notice on ${tl.suspensionNoticeDate}, founded on the failure arising ${defaultArose}. You may suspend or reduce the rate of work from ${addDays(tl.suspensionNoticeDate, 21)} until payment/certification is remedied.`,
+        : `You gave ${suspensionDays} days' notice on ${tl.suspensionNoticeDate}, founded on the failure arising ${defaultArose}. You may suspend or reduce the rate of work from ${addDays(tl.suspensionNoticeDate, suspensionDays)} until payment/certification is remedied.`,
       noticeGiven: true,
       premature,
       availableFrom: premature
         ? undefined
-        : addDays(tl.suspensionNoticeDate, 21),
+        : addDays(tl.suspensionNoticeDate, suspensionDays),
       accruesFrom: defaultArose,
     });
   } else {
     remedies.push({
       clauseRef: "16.1",
       label: "Suspension available (SC 16.1)",
-      description: `A failure to ${ipcDefault ? "certify (SC 14.6)" : "pay (SC 14.7)"} arose on ${defaultArose}. You may give the Employer not less than 21 days' notice under Sub-Clause 16.1, then suspend or reduce the rate of work until it is remedied.`,
+      description: `A failure to ${ipcDefault ? "certify (SC 14.6)" : "pay (SC 14.7)"} arose on ${defaultArose}. You may give the Employer not less than ${suspensionDays} days' notice under Sub-Clause 16.1, then suspend or reduce the rate of work until it is remedied.`,
       noticeGiven: false,
       accruesFrom: defaultArose,
     });

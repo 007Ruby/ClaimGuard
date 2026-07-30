@@ -50,6 +50,53 @@ export type TimelineDateField =
   | "paymentReceivedDate"
   | "suspensionNoticeDate";
 
+
+  /* ------------------------------------------------------------------ */
+/* Editable contractual periods                                        */
+/* ------------------------------------------------------------------ */
+
+export type DayOverrides = Record<string, number>;
+
+export interface EditablePeriod {
+  key: string;        // matches the step id where a step exists
+  clauseRef: string;
+  label: string;
+  defaultDays: number; // FIDIC GC default
+  hint: string;
+}
+
+/** The six periods surfaced for editing. Order is display order. */
+export const EDITABLE_PERIODS: EditablePeriod[] = [
+  { key: "20.1-notice",      clauseRef: "20.1", label: "Notice of claim",       defaultDays: 28, hint: "Days to serve the claim notice (time-bar)" },
+  { key: "20.1-particulars", clauseRef: "20.1", label: "Detailed particulars",  defaultDays: 42, hint: "Days to submit the fully detailed claim" },
+  { key: "20.1-response",    clauseRef: "20.1", label: "Engineer's response",   defaultDays: 42, hint: "Days for the Engineer to respond after receipt" },
+  { key: "14.6-ipc",         clauseRef: "14.6", label: "IPC issuance",          defaultDays: 28, hint: "Days for the Engineer to issue the IPC after receiving the Statement" },
+  { key: "14.7-payment",     clauseRef: "14.7", label: "Payment",               defaultDays: 56, hint: "Days for the Employer to pay after the Engineer receives the Statement" },
+  { key: "16.1-notice",      clauseRef: "16.1", label: "Suspension notice",     defaultDays: 21, hint: "Minimum days' notice before suspending work for non-payment" },
+];
+
+/**
+ * The effective time bar for a step: contract override if present and valid,
+ * otherwise the ClauseStep's own `days`, otherwise the EDITABLE_PERIODS
+ * default (covers 16.1-notice, which has no ClauseStep). Nullable is
+ * preserved for nominal steps that fix no period.
+ *
+ * Accepts a step object (in-chain) or a bare id (e.g. "16.1-notice").
+ */
+export function resolveDays(
+  step: ClauseStep | string,
+  dayOverrides?: DayOverrides | null,
+): number | null {
+  const id = typeof step === "string" ? step : step.id;
+  const o = dayOverrides?.[id];
+  if (typeof o === "number" && o > 0) return o;
+  if (typeof step !== "string") return step.days;
+  const found = getStep(id);
+  if (found) return found.days;
+  const period = EDITABLE_PERIODS.find((p) => p.key === id);
+  return period ? period.defaultDays : null;
+}
+
 /**
  * How a step is proved complete.
  *  - `date`    : the named field is populated.

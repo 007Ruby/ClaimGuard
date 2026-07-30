@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Sparkles, AlertTriangle } from "lucide-react";
+import { EDITABLE_PERIODS } from "@/lib/fidic/clauses";
 
 type Data = Record<string, any>;
 
@@ -22,6 +23,7 @@ const FIELDS: { key: string; label: string; type?: string }[] = [
   { key: "advancePaymentPct", label: "Advance payment %", type: "number" },
   { key: "retentionPct", label: "Retention %", type: "number" },
 ];
+
 
 export function ContractUpload({ initial, hasExisting }: { initial: Data | null; hasExisting?: boolean }) {
   const router = useRouter();
@@ -59,6 +61,7 @@ export function ContractUpload({ initial, hasExisting }: { initial: Data | null;
       setMsg(e?.message ?? "Couldn't read that PDF.");
     } finally { setExtracting(false); }
   }
+  
 
   function save() {
     if (!data) return;
@@ -69,6 +72,9 @@ export function ContractUpload({ initial, hasExisting }: { initial: Data | null;
       setData(null);
       router.refresh();
     });
+  }
+  function setPeriod(key: string, value: number | null) {
+    setData((d) => ({ ...(d ?? {}), dayOverrides: { ...((d ?? {}).dayOverrides ?? {}), [key]: value } }));
   }
 
   return (
@@ -94,7 +100,6 @@ export function ContractUpload({ initial, hasExisting }: { initial: Data | null;
           {msg && <p className={`text-sm ${saved ? "text-emerald-600" : "text-muted-foreground"}`}>{msg}</p>}
         </CardContent>
       </Card>
-
       {data && (
         <Card>
           <CardHeader><CardTitle>Review &amp; confirm</CardTitle></CardHeader>
@@ -118,6 +123,28 @@ export function ContractUpload({ initial, hasExisting }: { initial: Data | null;
                 </div>
               ))}
             </div>
+            <div className="space-y-2">
+  <Label>Contractual periods (days)</Label>
+  <p className="text-xs text-muted-foreground">
+    From the Particular Conditions where stated, otherwise FIDIC General Conditions. Edit before saving.
+  </p>
+  <div className="grid grid-cols-2 gap-4">
+    {EDITABLE_PERIODS.map((p) => (
+      <div key={p.key} className="space-y-1.5">
+        <Label htmlFor={`d-${p.key}`}>
+          {p.label} <span className="text-muted-foreground">(SC {p.clauseRef})</span>
+        </Label>
+        <Input
+          id={`d-${p.key}`}
+          type="number"
+          min={1}
+          value={data.dayOverrides?.[p.key] ?? p.defaultDays}
+          onChange={(e) => setPeriod(p.key, Number(e.target.value) || null)}
+        />
+      </div>
+    ))}
+  </div>
+</div>
             <Button onClick={save} disabled={saving}>
               {saving ? "Saving…" : hasExisting ? "Save & replace contract" : "Save contract"}
             </Button>

@@ -42,8 +42,7 @@ export function ContractSummary({ data }: { data: Record<string, any> }) {
         </div>
 
         <p className="text-xs text-muted-foreground">
-          These values drive every deadline and claim. Key FIDIC time bars applied:
-          notice 28 days (SC 20.1), detailed claim 42 days, IPC 28 days (SC 14.6), payment 56 days (SC 14.7).
+          These values drive every deadline and claim. 
         </p>
       </CardContent>
     </Card>

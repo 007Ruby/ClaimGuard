@@ -2,6 +2,8 @@ import { getSessionContext } from "@/lib/queries/session";
 import { createClient } from "@/lib/supabase/server";
 import { ContractSummary } from "@/components/contract/contract-summary";
 import { ContractUpload } from "@/components/contract/contract-upload";
+import { ContractPeriods } from "@/components/contract/contract-periods";
+import { ContractDetails } from "@/components/contract/contract-details";
 
 const CONTRACT_TABLE = "project_contracts";
 
@@ -26,7 +28,10 @@ export default async function ContractSettingsPage() {
       </div>
 
       {data ? (
-        <ContractSummary data={data} />
+        <>
+          <ContractDetails initial={data} />
+          <ContractPeriods initial={data} />
+        </>
       ) : (
         <p className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
           No contract uploaded yet. Upload your FIDIC PDF below to switch on deadlines and claims.

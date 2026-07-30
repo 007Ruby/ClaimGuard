@@ -22,7 +22,14 @@ const TARGET_KEYS = `{
   "delayDamagesPerDay": string, "maxDelayDamagesPct": number, "advancePaymentPct": number,
   "retentionPct": number, "retentionLimitPct": number, "minimumInterimPaymentCertificate": number,
   "dab": { "appointBy": string, "composition": string, "appointingEntity": string },
-  "arbitration": { "rules": string, "seat": string, "language": string }, "dayOverrides": {}
+  "arbitration": { "rules": string, "seat": string, "language": string }, "dayOverrides": {
+    "20.1-notice": number,      // SC 20.1 claim-notice period. GC default 28.
+    "20.1-particulars": number, // SC 20.1 detailed-claim period. GC default 42.
+    "20.1-response": number,    // SC 20.1 Engineer response period. GC default 42.
+    "14.6-ipc": number,         // SC 14.6 IPC issuance period. GC default 28.
+    "14.7-payment": number,     // SC 14.7 payment period. GC default 56.
+    "16.1-notice": number       // SC 16.1 suspension notice period. GC default 21.
+  }
 }`;
 
 export async function POST(req: Request) {
@@ -40,7 +47,15 @@ export async function POST(req: Request) {
     stage = "extract-text";
     const bytes = new Uint8Array(await file.arrayBuffer());
     let text = "";
-    try { text = await extractPdfText(bytes); } catch (e: any) { console.error("extract-text:", e); }
+    try {
+      text = await extractPdfText(new Uint8Array(bytes)); // copy: pdf.js detaches the buffer
+    } catch (e: any) {
+      console.error("extract-text:", e);
+      return NextResponse.json(
+        { error: `PDF text extraction threw: ${e?.message ?? String(e)}`, stage },
+        { status: 500 },
+      );
+    }
     if (!text.trim())
       return NextResponse.json({ error: "No text found (scanned PDF?).", stage }, { status: 422 });
 
@@ -59,7 +74,7 @@ export async function POST(req: Request) {
         response_format: { type: "json_object" },
         messages: [
           { role: "system", content:
-            "Extract the FIDIC Appendix to Tender / Contract Data. Return ONLY minified JSON matching this shape (null for anything not stated; never invent): " + TARGET_KEYS },
+            "Extract the FIDIC Appendix to Tender / Contract Data. Return ONLY minified JSON matching this shape (null for anything not stated; never invent): " + TARGET_KEYS + "For dayOverrides, these are contractual time periods with the FIDIC General Conditions defaults shown. Return the Particular Conditions figure ONLY where the Particular Conditions clearly amend the period; otherwise return the GC default. Never guess — when unsure, return the GC default."},
           { role: "user", content: text.slice(0, 24000) },
         ],
       });
