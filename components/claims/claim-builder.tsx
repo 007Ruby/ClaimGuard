@@ -35,16 +35,24 @@ type Draft = {
   modeNotice: boolean;
   modeDetailed: boolean;
   primaryEventId: string | null;
-  title: string; type: string; relief: string; amount: string; description: string;
-  extraEventIds: string[]; // additional evidence events (never includes primary)
+  title: string;
+  type: string;
+  relief: string;
+  amount: string;      // money (AED)
+  daysAmount: string;  // NEW — time (days)
+  description: string;
+  extraEventIds: string[];
   keyPointsText: string;
   generatedText: string;
 };
+
 const EMPTY: Draft = {
   modeNotice: false, modeDetailed: false, primaryEventId: null,
-  title: "", type: "variation_change", relief: "money", amount: "", description: "",
+  title: "", type: "variation_change", relief: "money",
+  amount: "", daysAmount: "", description: "",
   extraEventIds: [], keyPointsText: "", generatedText: "",
 };
+
 
 // Popup precedence — higher wins when several conditions apply at once.
 type GuardKind = "timebar" | "particulars" | "already" | "nudge";
@@ -99,6 +107,9 @@ export function ClaimBuilder({
 }) {
   const router = useRouter();
   const [draft, setDraft, clearDraft] = usePersistentState<Draft>("claim-draft", EMPTY);
+  const showQuantum = draft.modeDetailed;                                   // notice-only ⇒ no figures
+const showMoney = showQuantum && (draft.relief === "money" || draft.relief === "both");
+const showDays  = showQuantum && (draft.relief === "time"  || draft.relief === "both");
   const [context, setContext] = useState<EventClaimContext | null>(null);
   const [loadingCtx, setLoadingCtx] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
@@ -114,6 +125,8 @@ export function ClaimBuilder({
   const placeholders = (draft.generatedText.match(/\[INSERT/gi) ?? []).length;
 
   const arrivedViaAction = !!initialEventId;
+
+
 
   // Apply the deep-link (?event=&intent=) once it's known. Authoritative over
   // the persisted draft so "Action" from What's Next lands on the right event.
@@ -144,6 +157,24 @@ export function ClaimBuilder({
       .finally(() => { if (!cancelled) setLoadingCtx(false); });
     return () => { cancelled = true; };
   }, [draft.primaryEventId]);
+
+  function setRelief(relief: string) {
+  setDraft((d) => ({
+    ...d,
+    relief,
+    amount: relief === "time" ? "" : d.amount,
+    daysAmount: relief === "money" ? "" : d.daysAmount,
+  }));
+}
+
+  function setModeDetailed(on: boolean) {
+    setDraft((d) => ({
+      ...d,
+      modeDetailed: on,
+      amount: on ? d.amount : "",
+      daysAmount: on ? d.daysAmount : "",
+    }));
+  }
 
   function selectPrimary(id: string) {
     setAnalyzed(false);
@@ -275,9 +306,12 @@ export function ClaimBuilder({
       const kinds: ("notice" | "detailed")[] =
         mode === "both" ? ["notice", "detailed"] : [mode];
       for (const kind of kinds) {
-        const res = await createClaim({ ...base, kind });
+        const money = showMoney && draft.amount.trim() !== "" ? Number(draft.amount) : null;
+        const days  = showDays  && draft.daysAmount.trim() !== "" ? Number(draft.daysAmount) : null;
+
+        const res = await createClaim({ ...base, kind, amount: money, time_days: days });
         if (res?.error) { setErr(res.error); return; }
-      }
+              }
       setSaved(true);
       router.refresh();
     });
@@ -383,13 +417,29 @@ export function ClaimBuilder({
                 <SelectContent>{TYPES.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent>
               </Select></div>
             <div className="space-y-1.5"><Label>Relief sought</Label>
-              <Select value={draft.relief} onValueChange={(v) => patch({ relief: v })}>
+              <Select value={draft.relief} onValueChange={setRelief}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>{RELIEF.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent>
               </Select></div>
-            <div className="space-y-1.5"><Label htmlFor="c-amount">Amount (AED, optional)</Label>
-              <Input id="c-amount" type="number" value={draft.amount}
-                onChange={(e) => patch({ amount: e.target.value })} placeholder="leave blank if unknown" /></div>
+            
+ {showMoney && (
+  <div className="space-y-1.5">
+    <Label htmlFor="amount">Amount sought (AED)</Label>
+    <Input id="amount" inputMode="decimal" placeholder="e.g. 250000"
+      value={draft.amount}
+      onChange={(e) => setDraft((d) => ({ ...d, amount: e.target.value }))} />
+  </div>
+)}
+
+{showDays && (
+  <div className="space-y-1.5">
+    <Label htmlFor="daysAmount">Time sought (days)</Label>
+    <Input id="daysAmount" inputMode="numeric" placeholder="e.g. 21"
+      value={draft.daysAmount}
+      onChange={(e) => setDraft((d) => ({ ...d, daysAmount: e.target.value }))} />
+  </div>
+)}
+
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="c-desc">Description — what is this claim about?</Label>

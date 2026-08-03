@@ -20,6 +20,7 @@ export async function createClaim(input: {
   type?: string | null;
   relief_sought?: string | null;
   amount?: number | null;
+  time_days?: number | null;
   description?: string | null;
   body?: string | null;
   ai_generated?: boolean;
@@ -41,10 +42,8 @@ export async function createClaim(input: {
       kind: input.kind === "notice" ? "notice" : "detailed",
       type: norm(input.type, CLAIM_TYPES),
       relief_sought: norm(input.relief_sought, RELIEF),
-      amount:
-        typeof input.amount === "number" && !Number.isNaN(input.amount)
-          ? input.amount
-          : null,
+      amount: input.amount,
+      time_days: input.time_days ?? null,
       currency: "AED",
       description: (input.description ?? "").trim() || null,
       body: (input.body ?? "").trim() || null,
