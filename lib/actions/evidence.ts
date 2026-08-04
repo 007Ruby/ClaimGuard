@@ -3,9 +3,17 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getSessionContext } from "@/lib/queries/session";
 
+const ALIGNMENTS = ["aligned", "contentious", "against_contract"];
+
 function touch() {
   revalidatePath("/inbox"); revalidatePath("/events");
   revalidatePath("/calendar"); revalidatePath("/");
+}
+
+// Only the three valid flags (or null) may reach the CHECK-constrained column.
+function normAlignment(raw: FormDataEntryValue | null): string | null {
+  const v = String(raw ?? "").trim().toLowerCase();
+  return ALIGNMENTS.includes(v) ? v : null;
 }
 
 export async function createInboxItem(formData: FormData) {
@@ -33,6 +41,8 @@ export async function createInboxItem(formData: FormData) {
     title: String(formData.get("title") ?? "").trim() || null,
     content: String(formData.get("content") ?? "").trim() || null,
     event_date: String(formData.get("event_date") ?? "") || null,
+    ai_notes: String(formData.get("ai_notes") ?? "").trim() || null,
+    alignment: normAlignment(formData.get("alignment")),
     file_path: filePath, uploaded_by: user.id,
   });
   touch();
@@ -50,6 +60,8 @@ export async function updateInboxItem(formData: FormData) {
     title: String(formData.get("title") ?? "").trim() || null,
     content: String(formData.get("content") ?? "").trim() || null,
     event_date: String(formData.get("event_date") ?? "") || null,
+    ai_notes: String(formData.get("ai_notes") ?? "").trim() || null,
+    alignment: normAlignment(formData.get("alignment")),
     event_id: eventId, status: eventId ? "linked" : "inbox",
   }).eq("id", id);
   touch();

@@ -50,13 +50,19 @@ export async function POST(req: Request) {
     dayOverrides: contract?.data?.dayOverrides ?? {},
   };
 
-  const timeline: EventTimeline = {
+const timeline: EventTimeline = {
     type: event.type,
-    awarenessDate: event.awareness_date ?? event.event_date,
+    awarenessDate: event.awareness_date ?? event.occurred_on,
     noticeDate: event.notice_date,
     submissionDate: event.submission_date,
     engineerReceiptDate: event.engineer_receipt_date,
-    lastCompletedStepId: event.last_completed_step_id,
+    engineerResponseDate: event.engineer_response_date,
+    determinationDate: event.determination_date,
+    ipcIssuedDate: event.ipc_issued_date,
+    certifiedAmount: event.certified_amount,
+    paymentReceivedDate: event.payment_received_date,
+    amountReceived: event.amount_received,
+    suspensionNoticeDate: event.suspension_notice_date,
     closed: event.closed,
   };
 

@@ -10,12 +10,26 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Sparkles } from "lucide-react";
+import { Sparkles, ShieldCheck, ShieldAlert, ShieldX } from "lucide-react";
 
 const SOURCES = [["pasted_email","Pasted email"],["note","Note"],["file","File upload"]] as const;
 
-type Draft = { source: string; sourceTouched: boolean; title: string; content: string; eventDate: string; eventId: string; filePath: string };
-const EMPTY: Draft = { source: "note", sourceTouched: false, title: "", content: "", eventDate: "", eventId: "none", filePath: "" };
+const ALIGN = {
+  aligned: { label: "Aligned", className: "bg-emerald-100 text-emerald-800 border-emerald-200", Icon: ShieldCheck },
+  contentious: { label: "Contentious", className: "bg-amber-100 text-amber-900 border-amber-200", Icon: ShieldAlert },
+  against_contract: { label: "Against contract", className: "bg-red-100 text-red-800 border-red-200", Icon: ShieldX },
+} as const;
+type Alignment = keyof typeof ALIGN;
+
+type Draft = {
+  source: string; sourceTouched: boolean; title: string; content: string;
+  eventDate: string; eventId: string; filePath: string;
+  aiNotes: string; alignment: string;
+};
+const EMPTY: Draft = {
+  source: "note", sourceTouched: false, title: "", content: "",
+  eventDate: "", eventId: "none", filePath: "", aiNotes: "", alignment: "",
+};
 
 type Suggestion = {
   title?: string;
@@ -39,6 +53,15 @@ function looksLikeEmail(text: string): boolean {
   const tail = t.slice(-140);
   const signoff = /(kind regards|best regards|warm regards|regards|sincerely|yours (faithfully|sincerely|truly)|many thanks|thank you|thanks|cheers|best wishes)/i.test(tail);
   return greeting || signoff;
+}
+
+function AlignmentBadge({ value }: { value: Alignment }) {
+  const { label, className, Icon } = ALIGN[value];
+  return (
+    <span className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] font-semibold ${className}`}>
+      <Icon className="h-3 w-3" /> {label}
+    </span>
+  );
 }
 
 export function InboxForm({ events }: { events: { id: string; title: string }[] }) {
@@ -99,6 +122,8 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
     fd.set("title", draft.title);
     fd.set("content", draft.content);
     fd.set("event_date", draft.eventDate);
+    fd.set("ai_notes", draft.aiNotes);
+    fd.set("alignment", draft.alignment);
     if (draft.filePath) fd.set("file_path", draft.filePath); // already uploaded by the route
     start(async () => {
       await createInboxItem(fd);
@@ -107,19 +132,30 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
     });
   }
 
+  // One press runs both analyses: the classify+link suggestion AND the
+  // contract-alignment "further info". They're independent — one failing
+  // doesn't sink the other. Re-analyzing overwrites the further-info box.
   async function analyze() {
     setAnalyzing(true); setAiError(null); setSuggestion(null);
-    try {
-      const res = await fetch("/api/ai/analyze", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source_type: draft.source, content: draft.content }),
-      });
-      if (!res.ok) throw new Error();
-      const data = await res.json();
+    const payload = JSON.stringify({ source_type: draft.source, content: draft.content });
+    const [main, further] = await Promise.allSettled([
+      fetch("/api/ai/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: payload }),
+      fetch("/api/ai/inbox/further-info", { method: "POST", headers: { "Content-Type": "application/json" }, body: payload }),
+    ]);
+
+    if (main.status === "fulfilled" && main.value.ok) {
+      const data = await main.value.json();
       setSuggestion(data.suggestion); setSuggestionId(data.suggestionId);
-    } catch {
+    } else {
       setAiError("Couldn't get a suggestion. You can still enter the details manually.");
-    } finally { setAnalyzing(false); }
+    }
+
+    if (further.status === "fulfilled" && further.value.ok) {
+      const f = await further.value.json();
+      patch({ aiNotes: f.ai_notes ?? "", alignment: f.alignment ?? "" });
+    }
+
+    setAnalyzing(false);
   }
 
   function accept() {
@@ -154,6 +190,7 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
   // Analyze is available whenever there's text — including text extracted from a PDF.
   const canAnalyze = draft.content.trim().length > 0 && !analyzing && !extracting;
   const showContentBlock = draft.source !== "file" || draft.content.trim().length > 0;
+  const alignment = (draft.alignment || "") as Alignment | "";
 
   return (
     <Card>
@@ -197,6 +234,30 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
                 placeholder={draft.source === "pasted_email" ? "Paste the email here…" : "e.g. Delay on site on 14 May due to…"} />
             </div>
           )}
+
+          {/* Further info — AI contract-alignment notes; fills on Analyze, editable. */}
+          <div className="space-y-1.5 rounded-md border border-dashed p-3">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="ai_notes">
+                Further info <span className="font-normal text-muted-foreground">— how this sits against the contract</span>
+              </Label>
+              {alignment && <AlignmentBadge value={alignment} />}
+            </div>
+            <Textarea id="ai_notes" value={draft.aiNotes ?? ""} onChange={(e) => patch({ aiNotes: e.target.value })} rows={4}
+              placeholder="Filled by Analyze with AI — contract-grounded notes and a flag. You can edit or write your own." />
+            <div className="flex items-center gap-2">
+              <Label className="text-xs text-muted-foreground">Flag</Label>
+              <Select value={draft.alignment || "unset"} onValueChange={(v) => patch({ alignment: v === "unset" ? "" : v })}>
+                <SelectTrigger className="h-8 w-[190px]"><SelectValue placeholder="— none —" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="unset">— none —</SelectItem>
+                  <SelectItem value="aligned">Aligned</SelectItem>
+                  <SelectItem value="contentious">Contentious</SelectItem>
+                  <SelectItem value="against_contract">Against contract</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
 
           <div className="space-y-1.5"><Label>Linked event</Label>
             <Select value={draft.eventId} onValueChange={(v) => patch({ eventId: v })}>
