@@ -3,6 +3,7 @@ import { openai } from "@/lib/ai/client";
 import { createClient } from "@/lib/supabase/server";
 import { getSessionContext } from "@/lib/queries/session";
 import { CATEGORY_ROUTES, CLAUSES } from "@/lib/fidic/clauses";
+import { SCL_GROUNDING, shouldApplySCL } from "@/lib/fidic/scl-grounding";
 
 /**
  * POST /api/ai/claim/generate
@@ -87,7 +88,10 @@ export async function POST(req: Request) {
       ? body.amount
       : null;
 
+  const applySCL = shouldApplySCL(body?.claim_type, body?.relief_sought);
+
   const { system, user } = buildPrompt(mode, {
+    applySCL,
     eventTitle: ev.title ?? "(untitled event)",
     eventType: ev.type ?? "",
     occurredOn: ev.occurred_on ?? "",
@@ -127,6 +131,7 @@ const GROUNDING =
 function buildPrompt(
   mode: Mode,
   ctx: {
+    applySCL: boolean;
     eventTitle: string;
     eventType: string;
     occurredOn: string;
@@ -159,7 +164,9 @@ function buildPrompt(
             "Use a clear heading for each part so the single document reads as a complete notice-and-particulars submission.",
           ].join(" ");
 
-  const system = [GROUNDING, instruction, QUANTUM_RULE].join("\n\n");
+  const system = [GROUNDING, ctx.applySCL ? SCL_GROUNDING : "", instruction, QUANTUM_RULE]
+  .filter(Boolean)
+  .join("\n\n");
 
   const user = [
     `EVENT: ${ctx.eventTitle}`,
