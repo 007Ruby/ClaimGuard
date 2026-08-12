@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { createClaim } from "@/lib/actions/claims";
+import { createClaim, markClaimSubmitted } from "@/lib/actions/claims";
 import {
   getEventClaimContext,
   type EventClaimContext,
@@ -117,6 +117,9 @@ const showDays  = showQuantum && (draft.relief === "time"  || draft.relief === "
   const [generating, setGenerating] = useState(false);
   const [saving, startSave] = useTransition();
   const [saved, setSaved] = useState(false);
+  const [savedIds, setSavedIds] = useState<{ notice?: string; detailed?: string }>({});
+  const [submittedKinds, setSubmittedKinds] = useState<{ notice?: boolean; detailed?: boolean }>({});
+  const [savedMode, setSavedMode] = useState<"draft" | "submit" | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [guard, setGuard] = useState<GuardModal | null>(null);
 
@@ -288,7 +291,7 @@ const showDays  = showQuantum && (draft.relief === "time"  || draft.relief === "
     } finally { setGenerating(false); }
   }
 
-  function save() {
+  function save(intent: "draft" | "submit") {
     setErr(null);
     const mode = modeString();
     if (!mode) { setErr("Choose notice, detailed, or both."); return; }
@@ -302,24 +305,28 @@ const showDays  = showQuantum && (draft.relief === "time"  || draft.relief === "
         body: draft.generatedText, ai_generated: !!draft.generatedText,
         primary_event_id: draft.primaryEventId, event_ids: draft.extraEventIds,
       };
-      // "both" -> two records (notice + detailed) sharing the one combined body.
       const kinds: ("notice" | "detailed")[] =
         mode === "both" ? ["notice", "detailed"] : [mode];
+      const ids: { notice?: string; detailed?: string } = {};
       for (const kind of kinds) {
         const money = showMoney && draft.amount.trim() !== "" ? Number(draft.amount) : null;
         const days  = showDays  && draft.daysAmount.trim() !== "" ? Number(draft.daysAmount) : null;
 
         const res = await createClaim({ ...base, kind, amount: money, time_days: days });
         if (res?.error) { setErr(res.error); return; }
-              }
+        if (res?.id) ids[kind] = res.id;
+      }
+      setSavedIds(ids);
+      setSavedMode(intent);
       setSaved(true);
       router.refresh();
     });
   }
 
-  function startAnother() {
+function startAnother() {
     clearDraft(); setDraft(EMPTY); setSaved(false); setContext(null);
     setAnalyzed(false); appliedLink.current = null;
+    setSavedIds({}); setSubmittedKinds({}); setSavedMode(null);
   }
 
   const mode = modeString();
@@ -524,26 +531,76 @@ const showDays  = showQuantum && (draft.relief === "time"  || draft.relief === "
 
         {err && <p className="text-sm text-amber-600">{err}</p>}
 
-        {/* ---- Save ---- */}
+        {/* ---- Save: two explicit outcomes ---- */}
         {!saved && (
-          <Button onClick={save} disabled={saving}>{saving ? "Saving…" : "Save claim"}</Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={() => save("draft")} disabled={saving}>
+              {saving ? "Saving…" : "Save as draft"}
+            </Button>
+            <Button onClick={() => save("submit")} disabled={saving}>
+              {saving ? "Saving…" : "Save & mark as submitted"}
+            </Button>
+          </div>
         )}
 
-        {/* ---- Post-save: remind them to record it so deadlines track ---- */}
+        {/* ---- Post-save ---- */}
         {saved && draft.primaryEventId && (
           <div className="space-y-3 rounded-md border border-dashed p-3 text-sm">
             <div className="flex items-center gap-2 font-medium">
-              <CheckCircle2 className="h-4 w-4 text-emerald-600" /> Saved.
+              <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+              {savedMode === "submit" ? "Saved." : "Saved as draft."}
             </div>
-            <p className="text-muted-foreground">
-              Once you’ve actually sent it, mark it here so ClaimGuard can track the next deadline. (Generating doesn’t send it.)
-            </p>
-            {draft.modeNotice && (
-              <StepCompleteControl eventId={draft.primaryEventId} stepId="20.1-notice" label="Mark notice of claim as sent" />
+
+            {savedMode === "draft" && (
+              <p className="text-muted-foreground">
+                It stays editable — open it from the list below to change details, or mark it submitted later.
+              </p>
             )}
-            {draft.modeDetailed && (
-              <StepCompleteControl eventId={draft.primaryEventId} stepId="20.1-particulars" label="Mark detailed claim as submitted" />
+
+            {savedMode === "submit" && (
+              <>
+                <p className="text-muted-foreground">
+                  Once you’ve actually sent it, record the date so ClaimGuard can track the next deadline. (Generating doesn’t send it.)
+                </p>
+
+                {draft.modeNotice && (submittedKinds.notice ? (
+                  <p className="flex items-center gap-2 font-medium text-emerald-700">
+                    <CheckCircle2 className="h-4 w-4" /> Notice of claim marked as submitted.
+                  </p>
+                ) : (
+                  <StepCompleteControl
+                    eventId={draft.primaryEventId}
+                    stepId="20.1-notice"
+                    label="Mark notice of claim as sent"
+                    onCompleted={async () => {
+                      if (!savedIds.notice) return;
+                      const r = await markClaimSubmitted(savedIds.notice);
+                      if (r?.error) return { error: r.error };
+                      setSubmittedKinds((s) => ({ ...s, notice: true }));
+                    }}
+                  />
+                ))}
+
+                {draft.modeDetailed && (submittedKinds.detailed ? (
+                  <p className="flex items-center gap-2 font-medium text-emerald-700">
+                    <CheckCircle2 className="h-4 w-4" /> Detailed claim marked as submitted.
+                  </p>
+                ) : (
+                  <StepCompleteControl
+                    eventId={draft.primaryEventId}
+                    stepId="20.1-particulars"
+                    label="Mark detailed claim as submitted"
+                    onCompleted={async () => {
+                      if (!savedIds.detailed) return;
+                      const r = await markClaimSubmitted(savedIds.detailed);
+                      if (r?.error) return { error: r.error };
+                      setSubmittedKinds((s) => ({ ...s, detailed: true }));
+                    }}
+                  />
+                ))}
+              </>
             )}
+
             <Button variant="ghost" size="sm" onClick={startAnother}>Start another claim</Button>
           </div>
         )}

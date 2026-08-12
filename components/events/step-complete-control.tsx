@@ -10,16 +10,28 @@ function today() {
 }
 
 /**
- * "Mark done" for the current step. Reveals a date picker (defaulting to today),
- * records the completion via advanceEventStep, and refreshes so the engine moves
- * the event to the next step.
+ * "Mark done" for the current step. Reveals a date picker, records the completion
+ * via advanceEventStep, then refreshes so the engine moves to the next step.
+ *
+ * onCompleted: optional. Runs AFTER the step write succeeds, receiving the chosen
+ *   date. Return { error } to surface a problem and keep the picker open. Used by
+ *   the claim flow to flip the claim's status in the same action.
+ * initialDate: optional. Pre-fills the picker (e.g. when correcting an existing
+ *   served date) instead of defaulting to today.
  */
 export function StepCompleteControl({
-  eventId, stepId, label, size = "sm",
-}: { eventId: string; stepId: string; label: string; size?: "sm" | "default" }) {
+  eventId, stepId, label, size = "sm", onCompleted, initialDate,
+}: {
+  eventId: string;
+  stepId: string;
+  label: string;
+  size?: "sm" | "default";
+  onCompleted?: (date: string) => Promise<{ error?: string } | void> | { error?: string } | void;
+  initialDate?: string;
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [date, setDate] = useState(today());
+  const [date, setDate] = useState(initialDate ?? today());
   const [pending, start] = useTransition();
   const [err, setErr] = useState<string | null>(null);
 
@@ -27,6 +39,10 @@ export function StepCompleteControl({
     start(async () => {
       const res = await advanceEventStep(eventId, stepId, date);
       if (!res.ok) { setErr(res.error ?? "Failed"); return; }
+      if (onCompleted) {
+        const r = await onCompleted(date);
+        if (r && "error" in r && r.error) { setErr(r.error); return; }
+      }
       setErr(null); setOpen(false); router.refresh();
     });
   }
