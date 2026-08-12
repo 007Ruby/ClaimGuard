@@ -314,7 +314,7 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
             <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
               {suggestion.title && <li>Title: {suggestion.title}</li>}
               {suggestion.event_date && <li>Event date: {suggestion.event_date}</li>}
-              {suggestion.event_decision?.reason && <li>Why: {suggestion.event_decision.reason}</li>}
+              {suggestion.event_decision?.reason && <li>Why this event: {suggestion.event_decision.reason}</li>}
               {typeof suggestion.event_decision?.match_score === "number" &&
                 <li>Match score: {suggestion.event_decision.match_score.toFixed(2)}</li>}
             </ul>
