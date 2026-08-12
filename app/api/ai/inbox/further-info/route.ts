@@ -87,7 +87,8 @@ export async function POST(req: Request) {
       ai_notes: typeof out.ai_notes === "string" ? out.ai_notes : "",
       alignment,
     });
-  } catch {
+  } catch (e) {
+    console.error("[ai/analyze] classify failed:", e);
     return NextResponse.json({ error: "AI request failed" }, { status: 502 });
   }
 }

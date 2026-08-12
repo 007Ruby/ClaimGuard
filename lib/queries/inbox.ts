@@ -6,8 +6,10 @@ export async function listInboxItems() {
   const supabase = await createClient();
   const { data } = await supabase
     .from("evidence")
+// OLD
     .select("id, title, content, source_type, event_date, file_path, status, created_at, event:events(id, title)")
-    .eq("project_id", projectId)
+// NEW
+    .select("id, title, content, source_type, event_date, ai_notes, alignment, file_path, status, created_at, event:events(id, title)")    .eq("project_id", projectId)
     .order("created_at", { ascending: false });
   return data ?? [];
 }

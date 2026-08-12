@@ -1,6 +1,6 @@
 "use client";
-import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useTransition, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createInboxItem } from "@/lib/actions/evidence";
 import { resolveSuggestion } from "@/lib/actions/suggestions";
 import { usePersistentState } from "@/lib/use-persistent-state";
@@ -21,16 +21,6 @@ const ALIGN = {
 } as const;
 type Alignment = keyof typeof ALIGN;
 
-type Draft = {
-  source: string; sourceTouched: boolean; title: string; content: string;
-  eventDate: string; eventId: string; filePath: string;
-  aiNotes: string; alignment: string;
-};
-const EMPTY: Draft = {
-  source: "note", sourceTouched: false, title: "", content: "",
-  eventDate: "", eventId: "none", filePath: "", aiNotes: "", alignment: "",
-};
-
 type Suggestion = {
   title?: string;
   event_date?: string | null;
@@ -46,6 +36,18 @@ type Suggestion = {
   };
 };
 
+type Draft = {
+  source: string; title: string; content: string;
+  eventDate: string; eventId: string; filePath: string;
+  aiNotes: string; alignment: string;
+  suggestion: Suggestion | null; suggestionId: string | null;
+};
+const EMPTY: Draft = {
+  source: "note", title: "", content: "",
+  eventDate: "", eventId: "none", filePath: "", aiNotes: "", alignment: "",
+  suggestion: null, suggestionId: null,
+};
+
 function looksLikeEmail(text: string): boolean {
   const t = text.trim();
   if (t.length < 20) return false;
@@ -53,6 +55,16 @@ function looksLikeEmail(text: string): boolean {
   const tail = t.slice(-140);
   const signoff = /(kind regards|best regards|warm regards|regards|sincerely|yours (faithfully|sincerely|truly)|many thanks|thank you|thanks|cheers|best wishes)/i.test(tail);
   return greeting || signoff;
+}
+
+// The clean event name for the "Event: …" line — new event's title on a create,
+// or the matched event's title (looked up from the events list) on a link.
+function eventName(s: Suggestion, events: { id: string; title: string }[]): string | null {
+  const dec = s.event_decision;
+  if (!dec) return null;
+  if (dec.action === "create") return dec.new_event?.title || s.title || null;
+  if (dec.event_id) return events.find((e) => e.id === dec.event_id)?.title ?? null;
+  return null;
 }
 
 function AlignmentBadge({ value }: { value: Alignment }) {
@@ -66,12 +78,11 @@ function AlignmentBadge({ value }: { value: Alignment }) {
 
 export function InboxForm({ events }: { events: { id: string; title: string }[] }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [pending, start] = useTransition();
   const [draft, setDraft, clearDraft] = usePersistentState<Draft>("inbox-draft", EMPTY);
 
   const [analyzing, setAnalyzing] = useState(false);
-  const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
-  const [suggestionId, setSuggestionId] = useState<string | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
 
   // PDF extraction state
@@ -80,18 +91,31 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
 
   function patch(p: Partial<Draft>) { setDraft((d) => ({ ...d, ...p })); }
 
-  function onContent(v: string) {
-    setDraft((d) => {
-      const next = { ...d, content: v };
-      if (!d.sourceTouched && d.source !== "file" && looksLikeEmail(v)) next.source = "pasted_email";
-      return next;
-    });
-  }
+  // On return from creating a suggested event, stamp the new event onto the draft
+  // and flip the suggestion to "linked". setTimeout(0) lets the persisted-state
+  // restore land first, so this write isn't clobbered by hydration.
+  const linkedParam = searchParams.get("linked_event");
+  useEffect(() => {
+    if (!linkedParam) return;
+    const t = setTimeout(() => {
+      setDraft((d) => ({
+        ...d,
+        eventId: linkedParam,
+        suggestion: d.suggestion?.event_decision
+          ? { ...d.suggestion, event_decision: { ...d.suggestion.event_decision, action: "link", event_id: linkedParam } }
+          : d.suggestion,
+      }));
+      router.replace("/inbox");
+    }, 0);
+    return () => clearTimeout(t);
+  }, [linkedParam]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function onContent(v: string) { patch({ content: v }); }
 
   async function onFile(file: File | undefined) {
     if (!file) return;
     if (file.type !== "application/pdf") { setExtractMsg("PDF only for now."); return; }
-    setExtracting(true); setExtractMsg(null); setSuggestion(null);
+    setExtracting(true); setExtractMsg(null); patch({ suggestion: null, suggestionId: null });
     try {
       const fd = new FormData();
       fd.set("file", file);
@@ -125,18 +149,20 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
     fd.set("ai_notes", draft.aiNotes);
     fd.set("alignment", draft.alignment);
     if (draft.filePath) fd.set("file_path", draft.filePath); // already uploaded by the route
+    const usedSuggestionId = draft.suggestionId;
     start(async () => {
       await createInboxItem(fd);
-      clearDraft(); setDraft(EMPTY); setSuggestion(null); setSuggestionId(null); setExtractMsg(null);
+      if (usedSuggestionId) resolveSuggestion(usedSuggestionId, true);
+      clearDraft(); setDraft(EMPTY); setExtractMsg(null);
       router.refresh();
     });
   }
 
-  // One press runs both analyses: the classify+link suggestion AND the
-  // contract-alignment "further info". They're independent — one failing
-  // doesn't sink the other. Re-analyzing overwrites the further-info box.
+  // One press runs both analyses in parallel: the classify+link suggestion AND the
+  // contract-alignment "further info". Independent — one failing doesn't sink the other.
+  // The suggestion now fills the actual form fields (title, date, source, linked event).
   async function analyze() {
-    setAnalyzing(true); setAiError(null); setSuggestion(null);
+    setAnalyzing(true); setAiError(null); patch({ suggestion: null });
     const payload = JSON.stringify({ source_type: draft.source, content: draft.content });
     const [main, further] = await Promise.allSettled([
       fetch("/api/ai/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: payload }),
@@ -145,7 +171,18 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
 
     if (main.status === "fulfilled" && main.value.ok) {
       const data = await main.value.json();
-      setSuggestion(data.suggestion); setSuggestionId(data.suggestionId);
+      const s: Suggestion = data.suggestion ?? {};
+      const dec = s.event_decision;
+      // Source type is decided here now (not on paste): keep "file", else infer email vs note.
+      const derivedSource = draft.source === "file" ? "file" : (looksLikeEmail(draft.content) ? "pasted_email" : "note");
+      patch({
+        suggestion: s,
+        suggestionId: data.suggestionId ?? null,
+        source: derivedSource,
+        title: s.title ?? draft.title,
+        eventDate: s.event_date ?? draft.eventDate,
+        eventId: dec?.action === "link" && dec.event_id ? dec.event_id : draft.eventId,
+      });
     } else {
       setAiError("Couldn't get a suggestion. You can still enter the details manually.");
     }
@@ -158,28 +195,14 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
     setAnalyzing(false);
   }
 
-  function accept() {
-    if (!suggestion) return;
-    const dec = suggestion.event_decision;
-    setDraft((d) => {
-      const next = { ...d };
-      if (suggestion.title) next.title = suggestion.title;
-      if (suggestion.event_date) next.eventDate = suggestion.event_date;
-      if (dec?.action === "link" && dec.event_id) next.eventId = dec.event_id;
-      return next;
-    });
-    if (suggestionId) resolveSuggestion(suggestionId, true);
-    if (dec?.action !== "create" && dec?.action !== "ask") setSuggestion(null);
-  }
-
-  function reject() {
-    if (suggestionId) resolveSuggestion(suggestionId, false);
-    setSuggestion(null);
+  function dismiss() {
+    if (draft.suggestionId) resolveSuggestion(draft.suggestionId, false);
+    patch({ suggestion: null, suggestionId: null });
   }
 
   function goCreateEvent() {
-    const ne = suggestion?.event_decision?.new_event;
-    const params = new URLSearchParams({ new: "1", ts: Date.now().toString() });
+    const ne = draft.suggestion?.event_decision?.new_event;
+    const params = new URLSearchParams({ new: "1", ts: Date.now().toString(), return_to: "inbox" });
     if (ne?.title) params.set("title", ne.title);
     if (ne?.type) params.set("type", ne.type);
     if (ne?.occurred_on) params.set("occurred_on", ne.occurred_on);
@@ -187,10 +210,11 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
     router.push(`/events?${params.toString()}`);
   }
 
-  // Analyze is available whenever there's text — including text extracted from a PDF.
+  const suggestion = draft.suggestion;
   const canAnalyze = draft.content.trim().length > 0 && !analyzing && !extracting;
   const showContentBlock = draft.source !== "file" || draft.content.trim().length > 0;
   const alignment = (draft.alignment || "") as Alignment | "";
+  const evName = suggestion ? eventName(suggestion, events) : null;
 
   return (
     <Card>
@@ -202,7 +226,7 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5"><Label>Source type</Label>
-              <Select value={draft.source} onValueChange={(v) => patch({ source: v, sourceTouched: true })}>
+              <Select value={draft.source} onValueChange={(v) => patch({ source: v })}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>{SOURCES.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent>
               </Select></div>
@@ -235,7 +259,7 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
             </div>
           )}
 
-          {/* Further info — AI contract-alignment notes; fills on Analyze, editable. */}
+          {/* Further info — AI contract-alignment notes; fills on Analyze, editable, saved on Save. */}
           <div className="space-y-1.5 rounded-md border border-dashed p-3">
             <div className="flex items-center justify-between">
               <Label htmlFor="ai_notes">
@@ -280,23 +304,28 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
               <span className="text-sm font-medium">AI suggestion</span>
               {suggestion.confidence && <span className="text-xs text-muted-foreground">({suggestion.confidence} confidence)</span>}
             </div>
-            {suggestion.summary && <p className="text-sm">{suggestion.summary}</p>}
-            <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
+            {evName && (
+              <p className="text-sm font-medium">
+                Event: “{evName}”
+                {suggestion.event_decision?.action === "create" && <span className="ml-1 font-normal text-muted-foreground">(new)</span>}
+              </p>
+            )}
+            {suggestion.summary && <p className="mt-1 text-sm text-muted-foreground">{suggestion.summary}</p>}
+            <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
               {suggestion.title && <li>Title: {suggestion.title}</li>}
               {suggestion.event_date && <li>Event date: {suggestion.event_date}</li>}
-              {suggestion.event_decision?.reason && <li>Event: {suggestion.event_decision.reason}</li>}
+              {suggestion.event_decision?.reason && <li>Why: {suggestion.event_decision.reason}</li>}
               {typeof suggestion.event_decision?.match_score === "number" &&
-            <li>Match score: {suggestion.event_decision.match_score.toFixed(2)}</li>}
+                <li>Match score: {suggestion.event_decision.match_score.toFixed(2)}</li>}
             </ul>
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              <Button type="button" size="sm" onClick={accept}>Accept</Button>
-              <Button type="button" size="sm" variant="ghost" onClick={reject}>Reject</Button>
+              <Button type="button" size="sm" variant="ghost" onClick={dismiss}>Dismiss</Button>
               {suggestion.event_decision?.action === "create" && (
                 <Button type="button" size="sm" variant="outline" onClick={goCreateEvent}>Create suggested event</Button>
               )}
             </div>
             {suggestion.event_decision?.action === "ask" && (
-              <p className="mt-2 text-xs text-amber-600">No clear matching event — pick one above, or create your own.</p>
+              <p className="mt-2 text-xs text-amber-600">No clear matching event — pick one in the dropdown above, or create your own.</p>
             )}
           </div>
         )}

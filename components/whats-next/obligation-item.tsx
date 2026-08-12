@@ -56,13 +56,16 @@ function daysRemaining(iso: string | null): number | null {
   return Math.round((due - today) / 86_400_000);
 }
 
-function fmt(iso: string | null) {
-  if (!iso) return "no fixed date";
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric", month: "short", timeZone: "UTC",
-  }).format(new Date(iso + "T00:00:00.000Z"));
-}
+const MONTHS_SHORT = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+] as const;
 
+function fmt(date: Date | string | number | null | undefined): string {
+  if (date == null) return "—";        // or "" / "No date" — your call
+  const d = date instanceof Date ? date : new Date(date);
+  return `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]}`;
+}
 /**
  * Renders one What's Next row. The list is sorted by `actionDueDate` ascending
  * with `overdue` pinned to the top — see the events_status_due_idx query.

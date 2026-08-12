@@ -16,11 +16,24 @@ import { formatDate } from "@/lib/format";
 const SOURCES = [["pasted_email","Pasted email"],["note","Note"],["file","File upload"]] as const;
 const SOURCE_LABEL: Record<string,string> = Object.fromEntries(SOURCES);
 
+// NEW
 type InboxItem = {
   id: string; title: string | null; content: string | null; source_type: string;
   event_date: string | null; file_path: string | null; created_at: string;
+  ai_notes: string | null; alignment: string | null;
   event: { id: string; title: string } | null;
 };
+
+function AlignmentTag({ value }: { value: string }) {
+  const map: Record<string, { label: string; cls: string }> = {
+    aligned: { label: "Aligned", cls: "bg-emerald-100 text-emerald-800 border-emerald-200" },
+    contentious: { label: "Contentious", cls: "bg-amber-100 text-amber-900 border-amber-200" },
+    against_contract: { label: "Against contract", cls: "bg-red-100 text-red-800 border-red-200" },
+  };
+  const m = map[value];
+  if (!m) return null;
+  return <span className={`ml-2 inline-block rounded border px-1.5 py-0.5 text-[10px] font-semibold ${m.cls}`}>{m.label}</span>;
+}
 
 export function InboxList({ items, events, openId }: { items: InboxItem[]; events: { id: string; title: string }[]; openId?: string }) {
   const [active, setActive] = useState<string | null>(openId ?? null);
@@ -50,9 +63,16 @@ export function InboxList({ items, events, openId }: { items: InboxItem[]; event
                 </p>
               )}
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-2">
               {it.content && <p className="line-clamp-3 text-sm">{it.content}</p>}
               {it.file_path && <p className="text-sm text-muted-foreground">Attachment: {it.file_path.split("/").pop()}</p>}
+              {it.ai_notes && (
+                <div className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground">Further info</span>
+                  {it.alignment && <AlignmentTag value={it.alignment} />}
+                  <p className="mt-1 line-clamp-3">{it.ai_notes}</p>
+                </div>
+              )}
             </CardContent>
           </Card>
         ))}
@@ -73,6 +93,7 @@ function InboxEditForm({ item, events, onClose }: { item: InboxItem; events: { i
   const [pending, start] = useTransition();
   const [source, setSource] = useState(item.source_type);
   const [eventId, setEventId] = useState(item.event?.id ?? "none");
+  const [alignment, setAlignment] = useState(item.alignment ?? "");
   const [confirmDel, setConfirmDel] = useState(false);
 
   function submit(e: React.FormEvent<HTMLFormElement>) {
@@ -111,6 +132,22 @@ function InboxEditForm({ item, events, onClose }: { item: InboxItem; events: { i
             {events.map((ev) => <SelectItem key={ev.id} value={ev.id}>{ev.title}</SelectItem>)}
           </SelectContent>
         </Select></div>
+    <div className="space-y-1.5">
+        <Label htmlFor="i-ai_notes">Further info</Label>
+        <Textarea id="i-ai_notes" name="ai_notes" rows={4} defaultValue={item.ai_notes ?? ""} />
+        <div className="flex items-center gap-2">
+          <Label className="text-xs text-muted-foreground">Flag</Label>
+          <Select value={alignment || "unset"} onValueChange={(v) => setAlignment(v === "unset" ? "" : v)}>
+            <SelectTrigger className="h-8 w-[190px]"><SelectValue placeholder="— none —" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="unset">— none —</SelectItem>
+              <SelectItem value="aligned">Aligned</SelectItem>
+              <SelectItem value="contentious">Contentious</SelectItem>
+              <SelectItem value="against_contract">Against contract</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
       <div className="flex items-center justify-between pt-2">
         {confirmDel ? (
           <div className="flex items-center gap-2">

@@ -1,7 +1,6 @@
 "use client";
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
-import { createEvent } from "@/lib/actions/events";
+import { useRouter, useSearchParams } from "next/navigation";import { createEvent } from "@/lib/actions/events";
 import { usePersistentState } from "@/lib/use-persistent-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,6 +22,8 @@ type Initial = { title?: string; type?: string; occurred_on?: string; descriptio
 
 export function EventForm({ initial }: { initial?: Initial }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const returnTo = searchParams.get("return_to");
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const fromAI = !!initial;
@@ -53,10 +54,12 @@ export function EventForm({ initial }: { initial?: Initial }) {
     fd.set("occurred_on", draft.occurred_on);
     start(async () => {
       const res = await createEvent(fd);
-      if (res?.error) { setError(res.error); return; }
+       if (res?.error) { setError(res.error); return; }
       setError(null);
-      if (fromAI) router.replace("/events");          // drop ?new params, back to the plain form
-      else { clearDraft(); setDraft(EMPTY); }
+      if (fromAI) {
+        if (returnTo === "inbox" && res.id) router.replace(`/inbox?linked_event=${res.id}`);
+        else router.replace("/events");                // drop ?new params, back to the plain form
+      } else { clearDraft(); setDraft(EMPTY); }
     });
   }
 

@@ -36,7 +36,8 @@ export async function POST(req: Request) {
   try {
     const p = buildClassifyPrompt(source_type, content);
     cls = await askJSON(p.system, p.user);
-  } catch {
+} catch (e) {
+    console.error("[ai/analyze] classify failed:", e);
     return NextResponse.json({ error: "AI request failed" }, { status: 502 });
   }
   const category = VALID.includes(String(cls.category ?? "").toLowerCase())

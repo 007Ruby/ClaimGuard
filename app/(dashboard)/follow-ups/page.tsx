@@ -20,7 +20,7 @@ export default async function FollowUpsPage({
       </div>
       <FollowUpBuilder
         key={sp.event ?? "new"}
-        events={events as any}
+        events={events}
         initialEventId={sp.event ?? null}
       />
     </div>

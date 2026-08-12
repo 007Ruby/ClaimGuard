@@ -6,6 +6,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { getSessionContext } from "@/lib/queries/session";
 import { eventFlag } from "@/lib/fidic/get-obligations";
+import type { Remedy, Urgency } from "@/lib/fidic/engine";
 
 export interface AwaitingEvent {
   id: string;
@@ -18,6 +19,10 @@ export interface AwaitingEvent {
   actionDueDate: string | null;
   clauseRef: string | null;
   basisClauses: string[];
+  urgency: Urgency;
+  nominal: boolean;
+  remedies: Remedy[];
+  outstandingAmount: number | null;
 }
 
 export async function listAwaitingEvents(): Promise<AwaitingEvent[]> {
@@ -49,6 +54,10 @@ export async function listAwaitingEvents(): Promise<AwaitingEvent[]> {
       actionDueDate: flag.actionDueDate ?? null,
       clauseRef: flag.clauseRef ?? null,
       basisClauses: flag.basisClauses ?? [],
+      urgency: flag.urgency ?? "ok",
+      nominal: flag.nominal ?? false,
+      remedies: flag.remedies ?? [],
+      outstandingAmount: flag.outstandingAmount ?? null,
     });
   });
 

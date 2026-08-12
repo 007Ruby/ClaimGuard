@@ -13,23 +13,22 @@ function touch() {
   revalidatePath("/events"); revalidatePath("/inbox");
   revalidatePath("/calendar"); revalidatePath("/");
 }
-
-export async function createEvent(formData: FormData): Promise<{ error?: string }> {
+export async function createEvent(formData: FormData): Promise<{ error?: string; id?: string }> {
   const { orgId, projectId, user } = await getSessionContext();
   const supabase = await createClient();
   const title = String(formData.get("title") ?? "").trim();
   if (!title) return { error: "Title is required." };
 
-  const { error } = await supabase.from("events").insert({
+   const { data, error } = await supabase.from("events").insert({
     org_id: orgId, project_id: projectId, title,
     description: String(formData.get("description") ?? "").trim() || null,
     type: normalizeType(String(formData.get("type") ?? "other")),
     occurred_on: String(formData.get("occurred_on") ?? "") || null,
     created_by: user.id,
-  });
+  }).select("id").single();
   if (error) return { error: error.message };
   touch();
-  return {};
+  return { id: data?.id };
 }
 
 export async function updateEvent(formData: FormData): Promise<{ error?: string }> {
