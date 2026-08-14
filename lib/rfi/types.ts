@@ -8,10 +8,10 @@ export interface RfiQuery {
 }
 
 /**
- * The single seed shape used by ALL three entry points
- * (inbox flag · assistant card · manual "Analyze with AI").
- * createRfiDraft(seed) writes a draft row, then we deep-link to
- * /rfi?open={id}&ts={nonce}.
+ * The seed shape used by the parked assistant / inbox-flag entry points via
+ * createRfiDraft(seed). The RFI *page* no longer mints rows up-front — it uses
+ * the builder + saveRfiDraft (mirroring follow-ups), so createRfiDraft is now
+ * only kept alive for those other entry points.
  */
 export interface RfiSeed {
   eventId?: string | null;
@@ -53,6 +53,31 @@ export const RFI_STATUSES: RfiStatus[] = [
   "responded",
   "closed",
 ];
+
+/** Queries → the plain one-per-line textarea the builder/detail dialog edit. */
+export function queriesToText(queries: RfiQuery[]): string {
+  return queries.map((q) => q.question).filter(Boolean).join("\n");
+}
+
+/**
+ * The plain textarea → queries. AI-supplied contract refs are recovered
+ * POSITIONALLY: a line keeps its ref only if its question text is unchanged
+ * from the same position in `prev` (the last Analyze output, or the row's
+ * stored queries). Edited/new lines get a null ref — there's no ref-editing UI.
+ */
+export function linesToQueries(text: string, prev: RfiQuery[] = []): RfiQuery[] {
+  return text
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((question, i) => ({
+      question,
+      contractRef:
+        prev[i] && prev[i].question.trim() === question
+          ? prev[i].contractRef ?? null
+          : null,
+    }));
+}
 
 /** DB row (snake_case) → app model (camelCase). */
 export function mapRfi(row: any): Rfi {

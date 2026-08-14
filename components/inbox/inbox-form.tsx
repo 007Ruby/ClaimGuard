@@ -10,16 +10,10 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Sparkles, ShieldCheck, ShieldAlert, ShieldX } from "lucide-react";
+import { Sparkles } from "lucide-react";
+import { FlagChips } from "@/components/inbox/flag-chips";
 
 const SOURCES = [["pasted_email","Pasted email"],["note","Note"],["file","File upload"]] as const;
-
-const ALIGN = {
-  aligned: { label: "Aligned", className: "bg-emerald-100 text-emerald-800 border-emerald-200", Icon: ShieldCheck },
-  contentious: { label: "Contentious", className: "bg-amber-100 text-amber-900 border-amber-200", Icon: ShieldAlert },
-  against_contract: { label: "Against contract", className: "bg-red-100 text-red-800 border-red-200", Icon: ShieldX },
-} as const;
-type Alignment = keyof typeof ALIGN;
 
 type Suggestion = {
   title?: string;
@@ -39,12 +33,13 @@ type Suggestion = {
 type Draft = {
   source: string; title: string; content: string;
   eventDate: string; eventId: string; filePath: string;
-  aiNotes: string; alignment: string;
+  aiNotes: string; alignment: string; clarity: string; suggestedQuery: string;
   suggestion: Suggestion | null; suggestionId: string | null;
 };
 const EMPTY: Draft = {
   source: "note", title: "", content: "",
-  eventDate: "", eventId: "none", filePath: "", aiNotes: "", alignment: "",
+  eventDate: "", eventId: "none", filePath: "", aiNotes: "",
+  alignment: "", clarity: "", suggestedQuery: "",
   suggestion: null, suggestionId: null,
 };
 
@@ -65,15 +60,6 @@ function eventName(s: Suggestion, events: { id: string; title: string }[]): stri
   if (dec.action === "create") return dec.new_event?.title || s.title || null;
   if (dec.event_id) return events.find((e) => e.id === dec.event_id)?.title ?? null;
   return null;
-}
-
-function AlignmentBadge({ value }: { value: Alignment }) {
-  const { label, className, Icon } = ALIGN[value];
-  return (
-    <span className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] font-semibold ${className}`}>
-      <Icon className="h-3 w-3" /> {label}
-    </span>
-  );
 }
 
 export function InboxForm({ events }: { events: { id: string; title: string }[] }) {
@@ -148,6 +134,8 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
     fd.set("event_date", draft.eventDate);
     fd.set("ai_notes", draft.aiNotes);
     fd.set("alignment", draft.alignment);
+    fd.set("clarity", draft.clarity);
+    fd.set("suggested_query", draft.suggestedQuery);
     if (draft.filePath) fd.set("file_path", draft.filePath); // already uploaded by the route
     const usedSuggestionId = draft.suggestionId;
     start(async () => {
@@ -159,8 +147,9 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
   }
 
   // One press runs both analyses in parallel: the classify+link suggestion AND the
-  // contract-alignment "further info". Independent — one failing doesn't sink the other.
-  // The suggestion now fills the actual form fields (title, date, source, linked event).
+  // contract-alignment + clarity "further info". Independent — one failing doesn't
+  // sink the other. The suggestion fills the actual form fields; further-info now
+  // fills ai_notes, alignment, clarity AND the suggested RFI query.
   async function analyze() {
     setAnalyzing(true); setAiError(null); patch({ suggestion: null });
     const payload = JSON.stringify({ source_type: draft.source, content: draft.content });
@@ -189,7 +178,12 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
 
     if (further.status === "fulfilled" && further.value.ok) {
       const f = await further.value.json();
-      patch({ aiNotes: f.ai_notes ?? "", alignment: f.alignment ?? "" });
+      patch({
+        aiNotes: f.ai_notes ?? "",
+        alignment: f.alignment ?? "",
+        clarity: f.clarity ?? "",
+        suggestedQuery: f.suggested_query ?? "",
+      });
     }
 
     setAnalyzing(false);
@@ -213,7 +207,6 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
   const suggestion = draft.suggestion;
   const canAnalyze = draft.content.trim().length > 0 && !analyzing && !extracting;
   const showContentBlock = draft.source !== "file" || draft.content.trim().length > 0;
-  const alignment = (draft.alignment || "") as Alignment | "";
   const evName = suggestion ? eventName(suggestion, events) : null;
 
   return (
@@ -259,28 +252,51 @@ export function InboxForm({ events }: { events: { id: string; title: string }[] 
             </div>
           )}
 
-          {/* Further info — AI contract-alignment notes; fills on Analyze, editable, saved on Save. */}
+          {/* Further info — AI contract-alignment + clarity notes; fills on Analyze, editable, saved on Save. */}
           <div className="space-y-1.5 rounded-md border border-dashed p-3">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2">
               <Label htmlFor="ai_notes">
-                Further info <span className="font-normal text-muted-foreground">— how this sits against the contract</span>
+                Further info <span className="font-normal text-muted-foreground">— how this sits against the contract, and whether it&apos;s clear</span>
               </Label>
-              {alignment && <AlignmentBadge value={alignment} />}
+              <FlagChips
+                alignment={draft.alignment}
+                clarity={draft.clarity}
+                why={draft.aiNotes}
+                suggestedQuery={draft.suggestedQuery}
+              />
             </div>
             <Textarea id="ai_notes" value={draft.aiNotes ?? ""} onChange={(e) => patch({ aiNotes: e.target.value })} rows={4}
-              placeholder="Filled by Analyze with AI — contract-grounded notes and a flag. You can edit or write your own." />
-            <div className="flex items-center gap-2">
-              <Label className="text-xs text-muted-foreground">Flag</Label>
-              <Select value={draft.alignment || "unset"} onValueChange={(v) => patch({ alignment: v === "unset" ? "" : v })}>
-                <SelectTrigger className="h-8 w-[190px]"><SelectValue placeholder="— none —" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="unset">— none —</SelectItem>
-                  <SelectItem value="aligned">Aligned</SelectItem>
-                  <SelectItem value="contentious">Contentious</SelectItem>
-                  <SelectItem value="against_contract">Against contract</SelectItem>
-                </SelectContent>
-              </Select>
+              placeholder="Filled by Analyze with AI — contract-grounded notes and flags. You can edit or write your own." />
+            <div className="flex flex-wrap items-center gap-4">
+              <div className="flex items-center gap-2">
+                <Label className="text-xs text-muted-foreground">Alignment</Label>
+                <Select value={draft.alignment || "unset"} onValueChange={(v) => patch({ alignment: v === "unset" ? "" : v })}>
+                  <SelectTrigger className="h-8 w-[180px]"><SelectValue placeholder="— none —" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="unset">— none —</SelectItem>
+                    <SelectItem value="aligned">Aligned</SelectItem>
+                    <SelectItem value="contentious">Contentious</SelectItem>
+                    <SelectItem value="against_contract">Against contract</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-center gap-2">
+                <Label className="text-xs text-muted-foreground">Clarity</Label>
+                <Select value={draft.clarity || "unset"} onValueChange={(v) => patch({ clarity: v === "unset" ? "" : v })}>
+                  <SelectTrigger className="h-8 w-[140px]"><SelectValue placeholder="— none —" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="unset">— none —</SelectItem>
+                    <SelectItem value="clear">Clear</SelectItem>
+                    <SelectItem value="unclear">Unclear</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
+            {draft.suggestedQuery.trim() && (
+              <p className="text-xs text-muted-foreground">
+                Suggested RFI query captured — save the item, then use the flag chip to raise it.
+              </p>
+            )}
           </div>
 
           <div className="space-y-1.5"><Label>Linked event</Label>

@@ -4,16 +4,21 @@ import { createClient } from "@/lib/supabase/server";
 import { getSessionContext } from "@/lib/queries/session";
 
 const ALIGNMENTS = ["aligned", "contentious", "against_contract"];
+const CLARITIES = ["clear", "unclear"];
 
 function touch() {
   revalidatePath("/inbox"); revalidatePath("/events");
-  revalidatePath("/calendar"); revalidatePath("/");
+  revalidatePath("/calendar"); revalidatePath("/rfi"); revalidatePath("/");
 }
 
-// Only the three valid flags (or null) may reach the CHECK-constrained column.
+// Only the valid, CHECK-constrained values (or null) may reach the columns.
 function normAlignment(raw: FormDataEntryValue | null): string | null {
   const v = String(raw ?? "").trim().toLowerCase();
   return ALIGNMENTS.includes(v) ? v : null;
+}
+function normClarity(raw: FormDataEntryValue | null): string | null {
+  const v = String(raw ?? "").trim().toLowerCase();
+  return CLARITIES.includes(v) ? v : null;
 }
 
 export async function createInboxItem(formData: FormData) {
@@ -43,6 +48,8 @@ export async function createInboxItem(formData: FormData) {
     event_date: String(formData.get("event_date") ?? "") || null,
     ai_notes: String(formData.get("ai_notes") ?? "").trim() || null,
     alignment: normAlignment(formData.get("alignment")),
+    clarity: normClarity(formData.get("clarity")),
+    suggested_query: String(formData.get("suggested_query") ?? "").trim() || null,
     file_path: filePath, uploaded_by: user.id,
   });
   touch();
@@ -62,6 +69,8 @@ export async function updateInboxItem(formData: FormData) {
     event_date: String(formData.get("event_date") ?? "") || null,
     ai_notes: String(formData.get("ai_notes") ?? "").trim() || null,
     alignment: normAlignment(formData.get("alignment")),
+    clarity: normClarity(formData.get("clarity")),
+    suggested_query: String(formData.get("suggested_query") ?? "").trim() || null,
     event_id: eventId, status: eventId ? "linked" : "inbox",
   }).eq("id", id);
   touch();

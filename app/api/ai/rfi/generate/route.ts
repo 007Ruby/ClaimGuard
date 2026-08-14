@@ -8,10 +8,11 @@ import { RFI_GROUNDING } from "@/lib/rfi/grounding";
  * POST /api/ai/rfi/generate   ("Draft RFI")
  * ---------------------------------------------------------------------------
  * Turns the (user-editable) input boxes into a formal RFI letter. Grounds the
- * wording in the linked event + evidence but treats the boxes as the source of
- * truth. Never invents facts — missing specifics become [INSERT …] placeholders.
+ * wording in the linked event and/or the anchor inbox item, but treats the
+ * boxes as the source of truth. Never invents facts — missing specifics become
+ * [INSERT …] placeholders.
  *
- * Input:  { event_id?, subject, background, recipient?,
+ * Input:  { event_id?, evidence_id?, subject, background, recipient?,
  *           queries: [{question, contract_ref}], contract_references: string[] }
  * Output: { rfi }  (prose letter)
  * ---------------------------------------------------------------------------
@@ -50,42 +51,67 @@ export async function POST(req: Request) {
     );
   }
 
-  // Ground in the linked event + its evidence, when an event is set.
+  // Ground in the linked event and/or the anchor inbox item, when set.
   let eventText = "(no event linked)";
   let evidenceText = "(none linked)";
   const eventId: string | undefined = body?.event_id;
-  if (eventId) {
+  const evidenceId: string | undefined = body?.evidence_id;
+
+  if (eventId || evidenceId) {
     const { projectId } = await getSessionContext();
     const supabase = await createClient();
 
-    const { data: ev } = await supabase
-      .from("events")
-      .select("title, type, occurred_on, description")
-      .eq("id", eventId)
-      .eq("project_id", projectId)
-      .single();
-    if (ev) {
-      eventText = [
-        `${ev.title ?? "(untitled)"} · ${ev.type ?? ""}${ev.occurred_on ? ` · ${ev.occurred_on}` : ""}`,
-        ev.description ? ev.description : "",
-      ]
-        .filter(Boolean)
-        .join("\n");
+    if (eventId) {
+      const { data: ev } = await supabase
+        .from("events")
+        .select("title, type, occurred_on, description")
+        .eq("id", eventId)
+        .eq("project_id", projectId)
+        .single();
+      if (ev) {
+        eventText = [
+          `${ev.title ?? "(untitled)"} · ${ev.type ?? ""}${ev.occurred_on ? ` · ${ev.occurred_on}` : ""}`,
+          ev.description ? ev.description : "",
+        ]
+          .filter(Boolean)
+          .join("\n");
+      }
+
+      const { data: evidence } = await supabase
+        .from("evidence")
+        .select("content, source_type")
+        .eq("event_id", eventId);
+      evidenceText =
+        (evidence ?? [])
+          .map(
+            (e: any, i: number) =>
+              `[${i + 1}] (${e.source_type ?? "note"}) ${(e.content ?? "").trim()}`,
+          )
+          .filter((s) => s.length > 8)
+          .join("\n\n")
+          .slice(0, 8000) || "(none linked)";
     }
 
-    const { data: evidence } = await supabase
-      .from("evidence")
-      .select("content, source_type")
-      .eq("event_id", eventId);
-    evidenceText =
-      (evidence ?? [])
-        .map(
-          (e: any, i: number) =>
-            `[${i + 1}] (${e.source_type ?? "note"}) ${(e.content ?? "").trim()}`,
-        )
-        .filter((s) => s.length > 8)
-        .join("\n\n")
-        .slice(0, 8000) || "(none linked)";
+    // The inbox item this RFI was launched from (may be the only anchor).
+    if (evidenceId) {
+      const { data: item } = await supabase
+        .from("evidence")
+        .select("title, content, source_type, ai_notes")
+        .eq("id", evidenceId)
+        .eq("project_id", projectId)
+        .maybeSingle();
+      if (item) {
+        const anchorText = [
+          `(${item.source_type ?? "note"}) ${item.title ? `${item.title} — ` : ""}${(item.content ?? "").trim()}`,
+          item.ai_notes ? `Contract analysis: ${item.ai_notes}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n")
+          .slice(0, 8000);
+        evidenceText =
+          evidenceText === "(none linked)" ? anchorText : `${anchorText}\n\n${evidenceText}`;
+      }
+    }
   }
 
   const system = [RFI_GROUNDING, FORMAT, QUANTUM_RULE].join("\n\n");
@@ -131,7 +157,8 @@ export async function POST(req: Request) {
     return NextResponse.json({
       rfi: completion.choices[0]?.message?.content ?? "",
     });
-  } catch {
+  } catch (e) {
+    console.error("[ai/rfi/generate] failed:", e);
     return NextResponse.json({ error: "AI request failed" }, { status: 502 });
   }
 }
