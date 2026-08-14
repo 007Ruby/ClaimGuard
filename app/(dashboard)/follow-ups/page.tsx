@@ -1,13 +1,17 @@
-import { listAwaitingEvents } from "@/lib/queries/follow-ups";
+import { listAwaitingEvents, listSavedFollowUps } from "@/lib/queries/follow-ups";
 import { FollowUpBuilder } from "@/components/follow-ups/followup-builder";
+import { FollowUpsList } from "@/components/follow-ups/followups-list";
 
 export default async function FollowUpsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ event?: string }>;
+  searchParams: Promise<{ event?: string; analyze?: string; open?: string; ts?: string }>;
 }) {
   const sp = await searchParams;
-  const events = await listAwaitingEvents();
+  const [events, followUps] = await Promise.all([
+    listAwaitingEvents(),
+    listSavedFollowUps(),
+  ]);
 
   return (
     <div className="mx-auto max-w-3xl space-y-8 p-6">
@@ -22,7 +26,9 @@ export default async function FollowUpsPage({
         key={sp.event ?? "new"}
         events={events}
         initialEventId={sp.event ?? null}
+        autoAnalyze={sp.analyze === "1"}
       />
+      <FollowUpsList followUps={followUps} openId={sp.open} ts={sp.ts} />
     </div>
   );
 }

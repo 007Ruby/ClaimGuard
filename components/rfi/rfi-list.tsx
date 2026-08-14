@@ -2,9 +2,9 @@
 
 import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { RfiDialog, type EventOption } from "@/components/rfi/rfi-dialog";
+import { CreateRfiButton } from "@/components/rfi/create-rfi-button";
 import type { Rfi } from "@/lib/rfi/types";
 
 export function RfiList({
@@ -20,7 +20,6 @@ export function RfiList({
 
   const [activeId, setActiveId] = React.useState<string | null>(null);
 
-  // Open the dialog when arriving via ?open=id (the ?ts nonce re-mounts this).
   React.useEffect(() => {
     if (openId) setActiveId(openId);
   }, [openId]);
@@ -29,7 +28,6 @@ export function RfiList({
 
   function close() {
     setActiveId(null);
-    // Drop ?open / ?ts from the URL without a full navigation.
     router.replace("/rfi");
   }
 
@@ -38,10 +36,14 @@ export function RfiList({
 
   return (
     <>
+      <div className="flex items-center justify-end">
+        <CreateRfiButton seed={{}} label="New RFI" />
+      </div>
+
       {rfis.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No RFIs yet. Create one from an inbox item, the assistant, or by
-          picking an event here.
+          No RFIs yet. Create one with the button above, from an inbox item, or
+          from the assistant.
         </p>
       ) : (
         <div className="divide-y rounded-md border">

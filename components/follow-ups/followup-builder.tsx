@@ -1,6 +1,7 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
-import { usePersistentState } from "@/lib/use-persistent-state";
+import { useEffect, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { saveFollowUpDraft, markFollowUpSent } from "@/lib/actions/follow-ups";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,12 +13,12 @@ import {
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
-import { Sparkles, Wand2, Copy, Check, AlertTriangle } from "lucide-react";
+import { Sparkles, Wand2, Copy, Check, AlertTriangle, CheckCircle2 } from "lucide-react";
 
 type AwaitingEvent = {
   id: string; title: string; type: string | null; occurred_on: string | null;
   stepId: string | null; actionLabel: string | null; actionParty: string | null;
-  actionDueDate: string | null; clauseRef: string | null; basisClauses: string[];  urgency: "critical" | "soon" | "ok" | "none";
+  actionDueDate: string | null; clauseRef: string | null; basisClauses: string[]; urgency: "critical" | "soon" | "ok" | "none";
   nominal: boolean;
   remedies: { clauseRef: string; label: string; description: string; premature?: boolean; availableFrom?: string; accruesFrom?: string }[];
   outstandingAmount: number | null;
@@ -30,7 +31,9 @@ type Draft = {
   keyPointsText: string;
   emailText: string;
 };
-const EMPTY: Draft = { eventId: null, recipient: "", subject: "", keyPointsText: "", emailText: "" };
+const EMPTY: Draft = {
+  eventId: null, recipient: "", subject: "", keyPointsText: "", emailText: "",
+};
 
 function daysRemaining(iso: string | null): number | null {
   if (!iso) return null;
@@ -47,54 +50,65 @@ function partyLabel(p: string | null | undefined) {
 export function FollowUpBuilder({
   events,
   initialEventId,
+  autoAnalyze = false,
 }: {
   events: AwaitingEvent[];
   initialEventId?: string | null;
+  autoAnalyze?: boolean;
 }) {
-  const [draft, setDraft, clearDraft] = usePersistentState<Draft>("followup-draft", EMPTY);
+  const router = useRouter();
+  // Plain useState (not usePersistentState): the DB card list is the persistence
+  // layer now, and localStorage restore was racing the deep-link and clobbering
+  // the selected event. The page remounts this per ?event= via its key.
+  const [draft, setDraft] = useState<Draft>(EMPTY);
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzed, setAnalyzed] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [saving, startSave] = useTransition();
   const [err, setErr] = useState<string | null>(null);
-  const [guard, setGuard] = useState<{ message: string; onProceed: () => void } | null>(null);
+  const [flash, setFlash] = useState<string | null>(null);
+  const [guard, setGuard] = useState<{ title: string; message: string; onProceed: () => void } | null>(null);
 
   const patch = (p: Partial<Draft>) => setDraft((d) => ({ ...d, ...p }));
   const selected = events.find((e) => e.id === draft.eventId) ?? null;
   const party = partyLabel(selected?.actionParty);
   const rem = selected ? daysRemaining(selected.actionDueDate) : null;
-  // Urgency already encodes "someone has blown a real deadline", including the
-  // 14.7 payment default. A nominal 3.5 period never reaches critical, so the
-  // soft popup correctly still fires on a slow determination.
   const overdue = selected?.urgency === "critical";
   const premature16 = selected?.remedies.find((r) => r.premature) ?? null;
 
   const arrivedViaAction = !!initialEventId;
-  const analyzePrimed = !!draft.eventId && !analyzed && !draft.emailText;
+  const analyzePrimed = !!draft.eventId && !analyzed && !analyzing && !draft.emailText;
 
-  // Apply the deep-link (?event=) once.
+  // Pick an awaited item → always start a fresh draft for it. Editing a saved
+  // draft happens via its card in the list below, not here.
+  function loadEvent(id: string) {
+    setAnalyzed(false);
+    setFlash(null);
+    const ev = events.find((e) => e.id === id);
+    setDraft({ ...EMPTY, eventId: id, recipient: `[${partyLabel(ev?.actionParty)}]` });
+  }
+
+  // Apply the deep-link (?event=) once on mount.
   const appliedLink = useRef<string | null>(null);
   useEffect(() => {
     if (!initialEventId) return;
     if (appliedLink.current === initialEventId) return;
     appliedLink.current = initialEventId;
-    setAnalyzed(false);
-    setDraft((d) => ({ ...d, eventId: initialEventId }));
+    loadEvent(initialEventId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialEventId]);
 
-  // Default the recipient placeholder from the responsible party when empty.
+  // Auto-fire Analyze when arriving via "Write follow-up" (?analyze=1), once the
+  // deep-linked event has loaded. Guarded so a refresh never re-fires it.
+  const autoAnalyzeFired = useRef(false);
   useEffect(() => {
-    if (selected && !draft.recipient.trim()) {
-      patch({ recipient: `[${partyLabel(selected.actionParty)}]` });
-    }
+    if (!autoAnalyze || autoAnalyzeFired.current) return;
+    if (!selected || draft.emailText) return;
+    autoAnalyzeFired.current = true;
+    analyze();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft.eventId]);
-
-  function selectEvent(id: string) {
-    setAnalyzed(false);
-    patch({ eventId: id, recipient: `[${partyLabel(events.find((e) => e.id === id)?.actionParty)}]` });
-  }
+  }, [autoAnalyze, selected]);
 
   async function analyze() {
     if (!selected) { setErr("Select the event you're following up on first."); return; }
@@ -106,7 +120,7 @@ export function FollowUpBuilder({
           event_id: selected.id, party: selected.actionParty,
           action_label: selected.actionLabel, clause_ref: selected.clauseRef,
           due_date: selected.actionDueDate, days: rem, nominal: selected.nominal,
-           remedies: selected.remedies.map((r) => ({ clause: r.clauseRef, text: r.description })),
+          remedies: selected.remedies.map((r) => ({ clause: r.clauseRef, text: r.description })),
           outstanding: selected.outstandingAmount,
         }),
       });
@@ -129,6 +143,7 @@ export function FollowUpBuilder({
       const due = selected.actionDueDate ?? "the due date";
       const inN = rem !== null ? ` — due in ${rem} day${rem === 1 ? "" : "s"} (on ${due})` : "";
       setGuard({
+        title: "Not overdue yet",
         message: `This isn't overdue yet${inN}. The ${party} still has time to respond, but you can send a follow-up now to prompt them.`,
         onProceed: runDraft,
       });
@@ -149,7 +164,7 @@ export function FollowUpBuilder({
           due_date: selected.actionDueDate, days: rem, nominal: selected.nominal,
           subject: draft.subject,
           key_points: draft.keyPointsText.split("\n").map((s) => s.trim()).filter(Boolean),
-           remedies: selected.remedies.map((r) => ({ clause: r.clauseRef, text: r.description })),
+          remedies: selected.remedies.map((r) => ({ clause: r.clauseRef, text: r.description })),
           outstanding: selected.outstandingAmount,
         }),
       });
@@ -172,8 +187,59 @@ export function FollowUpBuilder({
     }
   }
 
-  function startAnother() {
-    clearDraft(); setDraft(EMPTY); setAnalyzed(false); appliedLink.current = null;
+  // Always inserts a fresh row, then optionally marks it sent. After success the
+  // form clears and the new card shows below.
+  function persist(then?: "sent") {
+    if (!selected) return;
+    startSave(async () => {
+      const res = await saveFollowUpDraft({
+        event_id: selected.id,
+        step_id: selected.stepId!,
+        recipient: draft.recipient,
+        subject: draft.subject,
+        key_points: draft.keyPointsText,
+        body: draft.emailText,
+      });
+      if (res.error) { setErr(res.error); return; }
+      if (then === "sent") {
+        const r = await markFollowUpSent(res.id!);
+        if (r.error) { setErr(r.error); return; }
+      }
+      setDraft(EMPTY);
+      setAnalyzed(false);
+      setFlash(
+        then === "sent"
+          ? "Saved and marked as sent — see it in Saved follow-ups below."
+          : "Saved as draft — see it in Saved follow-ups below.",
+      );
+      setTimeout(() => setFlash(null), 4000);
+      router.refresh(); // refresh the page's saved-follow-ups list
+    });
+  }
+
+  function saveDraft(then?: "sent") {
+    setErr(null); setFlash(null);
+    if (!selected) { setErr("Select the event you're following up on."); return; }
+    if (!selected.stepId) { setErr("This item has no tracked step to follow up on."); return; }
+    const anything = draft.subject.trim() || draft.emailText.trim() || draft.keyPointsText.trim();
+    if (!anything) { setErr("Nothing to save yet — analyze or write the email first."); return; }
+
+    const bodyEmpty = !draft.emailText.trim();
+    // Sent is a record of a real email — refuse to log an empty one.
+    if (then === "sent" && bodyEmpty) {
+      setErr("Add the email text before marking this as sent.");
+      return;
+    }
+    // Draft with no body is fine, but confirm it's intentional.
+    if (then !== "sent" && bodyEmpty) {
+      setGuard({
+        title: "Email is empty",
+        message: "The email field is empty. Save this as a draft anyway?",
+        onProceed: () => persist(then),
+      });
+      return;
+    }
+    persist(then);
   }
 
   return (
@@ -184,7 +250,7 @@ export function FollowUpBuilder({
         {/* ---- Which outstanding item ---- */}
         <div className="space-y-1.5">
           <Label>What are you following up on?</Label>
-          <Select value={draft.eventId ?? ""} onValueChange={selectEvent}>
+          <Select value={draft.eventId ?? ""} onValueChange={loadEvent}>
             <SelectTrigger><SelectValue placeholder="Select an awaited action" /></SelectTrigger>
             <SelectContent>
               {events.map((ev) => (
@@ -210,13 +276,13 @@ export function FollowUpBuilder({
             </p>
           )}
           {premature16 && (
-  <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-800">
-    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-    <span>
-      <strong>Your SC 16.1 notice is invalid.</strong> {premature16.description}
-    </span>
-  </div>
-)}
+            <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                <strong>Your SC 16.1 notice is invalid.</strong> {premature16.description}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* ---- Primed hint ---- */}
@@ -272,16 +338,27 @@ export function FollowUpBuilder({
         </div>
 
         {err && <p className="text-sm text-amber-600">{err}</p>}
-
-        {draft.emailText.trim() && (
-          <Button variant="ghost" size="sm" onClick={startAnother}>Start another follow-up</Button>
+        {flash && (
+          <p className="flex items-center gap-2 text-sm text-emerald-700">
+            <CheckCircle2 className="h-4 w-4" /> {flash}
+          </p>
         )}
+
+        {/* ---- Save / send — always present ---- */}
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={() => saveDraft()} disabled={saving || !selected}>
+            {saving ? "Saving…" : "Save as draft"}
+          </Button>
+          <Button onClick={() => saveDraft("sent")} disabled={saving || !selected}>
+            {saving ? "Saving…" : "Save & mark as sent"}
+          </Button>
+        </div>
       </CardContent>
 
-      {/* ---- Not-yet-overdue popup ---- */}
+      {/* ---- Confirm popup (not-yet-overdue draft, or empty-email draft) ---- */}
       <Dialog open={!!guard} onOpenChange={(o) => { if (!o) setGuard(null); }}>
         <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>Not overdue yet</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{guard?.title ?? "Please confirm"}</DialogTitle></DialogHeader>
           <p className="text-sm text-muted-foreground">{guard?.message}</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setGuard(null)}>Cancel</Button>

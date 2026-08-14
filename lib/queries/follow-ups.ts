@@ -69,3 +69,46 @@ export async function listAwaitingEvents(): Promise<AwaitingEvent[]> {
   });
   return out;
 }
+
+export type SavedFollowUp = {
+  id: string;
+  eventId: string;
+  eventTitle: string | null;
+  stepId: string;
+  recipient: string | null;
+  subject: string | null;
+  keyPoints: string | null;
+  body: string | null;
+  status: "draft" | "sent";
+  sentAt: string | null;
+  updatedAt: string | null;
+};
+
+export async function listSavedFollowUps(): Promise<SavedFollowUp[]> {
+  const { projectId } = await getSessionContext();
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("follow_ups")
+    .select(
+      "id, event_id, step_id, recipient, subject, key_points, body, status, sent_at, updated_at, event:events(title)",
+    )
+    .eq("project_id", projectId)
+    .order("updated_at", { ascending: false });
+  if (error) {
+    console.error(error);
+    return [];
+  }
+  return (data ?? []).map((r: any) => ({
+    id: r.id,
+    eventId: r.event_id,
+    eventTitle: r.event?.title ?? null,
+    stepId: r.step_id,
+    recipient: r.recipient,
+    subject: r.subject,
+    keyPoints: r.key_points,
+    body: r.body,
+    status: r.status,
+    sentAt: r.sent_at,
+    updatedAt: r.updated_at,
+  }));
+}

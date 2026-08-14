@@ -4,7 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, Inbox, AlertCircle, Clock, FileText, Calendar,
-  MailPlus, 
+  MailPlus,
+  MailQuestionMark, 
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -15,6 +16,7 @@ const nav = [
   { href: "/claims", label: "Claims", icon: FileText },
   { href: "/calendar", label: "Calendar", icon: Calendar },
   { href: "/follow-ups", label: "Follow-ups", icon: MailPlus },
+  {href: "/rfi", label: "RFI", icon: MailQuestionMark },
   {href: "/settings", label: "Settings", icon: Clock }
 ];
 

@@ -5,8 +5,9 @@ import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle } from "lucide-react";
-import { CLAUSES } from "@/lib/fidic/clauses";
+import { CLAUSES, STEP_DONE_LABEL } from "@/lib/fidic/clauses";
 import { STATUS_LABEL, type EventStatus, type Remedy, type Urgency } from "@/lib/fidic/engine";
+import { StepCompleteControl } from "@/components/events/step-complete-control";
 export interface WhatsNextItem {
   eventId: string;
   eventTitle: string;
@@ -80,9 +81,9 @@ export function ObligationItem({ item }: { item: WhatsNextItem }) {
   const href = intent
     ? `/claims?event=${item.eventId}&intent=${intent}`
     : isFollowup
-      ? `/follow-ups?event=${item.eventId}`
+      ? `/follow-ups?event=${item.eventId}&analyze=1`
       : `/events?open=${item.eventId}`;
-  <Button asChild size="sm" variant={item.urgency === "critical" ? "default" : "outline"}></Button>
+  const doneLabel = item.stepId ? STEP_DONE_LABEL[item.stepId] : undefined;
   const chasingPayment = item.remedies.some((r) => r.clauseRef === "14.8");
   const label = intent
     ? "Action"
@@ -146,6 +147,9 @@ export function ObligationItem({ item }: { item: WhatsNextItem }) {
           <Button asChild size="sm" variant={item.status === "overdue" ? "default" : "outline"}>
             <Link href={href}>{label}</Link>
           </Button>
+          {isFollowup && item.stepId && doneLabel && (
+            <StepCompleteControl eventId={item.eventId} stepId={item.stepId} label={doneLabel} />
+          )}
         </div>
       </div>
     </Card>

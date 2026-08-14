@@ -6,8 +6,9 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { AlertTriangle, Clock, CheckCircle2, CircleDashed, Pause } from "lucide-react";
-import { CLAUSES, STEP_DONE_LABEL } from "@/lib/fidic/clauses";
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
+import { AlertTriangle, Clock, CheckCircle2, CircleDashed, Pause } from "lucide-react";import { CLAUSES, STEP_DONE_LABEL } from "@/lib/fidic/clauses";
 import { STATUS_LABEL, type EventStatus, type Remedy, type Urgency } from "@/lib/fidic/engine";
 import { StepCompleteControl } from "@/components/events/step-complete-control";
 
@@ -143,6 +144,15 @@ export function EventStatusFlag({ flag }: { flag: EventFlag }) {
     )}
   </div>
 ))}
+        {/* Awaiting the other party → chase them. Primary action for awaiting steps;
+            the "mark responded/done" control below is the secondary path. */}
+        {flag.eventId && flag.status === "awaiting" && (
+          <div className="mt-3">
+            <Button asChild size="sm" className="w-full">
+              <Link href={`/follow-ups?event=${flag.eventId}&analyze=1`}>Write follow-up</Link>
+            </Button>
+          </div>
+        )}
 
         {/* Advance the chain: record that this step was done. */}
         {flag.eventId && flag.stepId && doneLabel && flag.status !== "closed" && (
