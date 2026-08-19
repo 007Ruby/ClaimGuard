@@ -29,6 +29,12 @@ function trunc(s: string | null | undefined, n: number): string {
   return t.length > n ? t.slice(0, n) + "…" : t;
 }
 
+function sectionFailed(failed: string[], label: string, e: unknown): string {
+  console.error(`[chat context] ${label} failed:`, e);
+  failed.push(label);
+  return `${label}\n(⚠ COULD NOT BE LOADED this session — a loading/technical error, NOT a sign there are none)`;
+}
+
 function capList(lines: string[]): string {
   if (lines.length <= MAX_ITEMS) return lines.join("\n");
   return lines.slice(0, MAX_ITEMS).join("\n") + `\n…and ${lines.length - MAX_ITEMS} more`;
@@ -53,17 +59,26 @@ function contractTerms(data: Record<string, any>): string {
   ].join("\n");
 }
 
-export async function buildChatContext(): Promise<string> {
+export async function buildChatContext(): Promise<{
+  context: string;
+  contractError: boolean;
+  failedSections: string[];
+}> {
   const { projectId } = await getSessionContext();
   const supabase = await createClient();
   const parts: string[] = [];
+  const failedSections: string[] = [];
+  let contractError = false;
 
   // --- Contract: key terms + full text sidecar ---
+  // --- Contract: key terms + full text sidecar ---
   try {
-    const { data: contract } = await supabase
+    const { data: contract, error: cErr } = await supabase
       .from("project_contracts").select("data").eq("project_id", projectId).maybeSingle();
+    if (cErr) throw cErr; // a query error must NOT masquerade as "no contract uploaded"
     const data = (contract?.data as Record<string, any>) ?? null;
     if (!data) {
+      // Normal state for a new project — NOT an error. Bot explains, doesn't alarm.
       parts.push("CONTRACT\n(no contract uploaded yet)");
     } else {
       parts.push(contractTerms(data));
@@ -77,8 +92,10 @@ export async function buildChatContext(): Promise<string> {
             text = text.slice(0, CONTRACT_TEXT_CHAR_CAP) + "\n…[contract text truncated]";
           if (text) parts.push("CONTRACT TEXT (reference)\n" + text);
         } catch (e) {
+          // Text sidecar is reference prose; the authoritative TERMS above still loaded,
+          // so this is a per-section note, NOT a hard stop.
           console.error("[chat context] contract text download failed:", e);
-          parts.push("CONTRACT TEXT\n(unavailable — only the extracted key terms above are usable)");
+          parts.push("CONTRACT TEXT\n(⚠ could not be loaded this session — the key terms above are still usable)");
         }
       } else {
         parts.push("CONTRACT TEXT\n(this contract predates full-text storage — only extracted key terms above are usable)");
@@ -86,6 +103,8 @@ export async function buildChatContext(): Promise<string> {
     }
   } catch (e) {
     console.error("[chat context] contract load failed:", e);
+    contractError = true; // load-bearing failure → route refuses project answers
+    parts.push("CONTRACT\n(⚠ COULD NOT BE LOADED this session — a loading/technical error)");
   }
 
   // --- Events (with linked evidence) ---
@@ -97,7 +116,7 @@ export async function buildChatContext(): Promise<string> {
              (ev2 ? `; evidence: ${ev2}` : "");
     });
     parts.push(`EVENTS (${events.length})\n${capList(lines) || "(none)"}`);
-  } catch (e) { console.error("[chat context] events failed:", e); }
+  } catch (e) { parts.push(sectionFailed(failedSections, "EVENTS", e)); }
 
   // --- Deadlines awaiting the other party (system-computed) ---
   try {
@@ -112,7 +131,7 @@ export async function buildChatContext(): Promise<string> {
       `DEADLINES AWAITING OTHER PARTY (system-computed — AUTHORITATIVE for these dates) (${awaiting.length})\n` +
       (capList(lines) || "(none)"),
     );
-  } catch (e) { console.error("[chat context] awaiting failed:", e); }
+  } catch (e) { parts.push(sectionFailed(failedSections, "DEADLINES", e)); }
 
   // --- Claims ---
   try {
@@ -126,7 +145,7 @@ export async function buildChatContext(): Promise<string> {
              (evs ? `; events: ${evs}` : "");
     });
     parts.push(`CLAIMS (${claims.length})\n${capList(lines) || "(none)"}`);
-  } catch (e) { console.error("[chat context] claims failed:", e); }
+  } catch (e) { parts.push(sectionFailed(failedSections, "CLAIMS", e)); }
 
   // --- RFIs (queried directly; assumes table `rfis`) ---
   try {
@@ -142,10 +161,8 @@ export async function buildChatContext(): Promise<string> {
                   (r.response_summary ? `; response: ${trunc(r.response_summary, 120)}` : ""),
     );
     parts.push(`RFIs (${(data ?? []).length})\n${capList(lines) || "(none)"}`);
-  } catch (e) {
-    console.error("[chat context] rfis failed:", e);
-    parts.push("RFIs\n(unavailable)");
-  }
+  }  catch (e) { parts.push(sectionFailed(failedSections, "RFIs", e)); }
+
 
   // --- Follow-ups ---
   try {
@@ -156,7 +173,7 @@ export async function buildChatContext(): Promise<string> {
              (f.subject ? `: ${trunc(f.subject, 80)}` : ""),
     );
     parts.push(`FOLLOW-UPS (${fus.length})\n${capList(lines) || "(none)"}`);
-  } catch (e) { console.error("[chat context] follow-ups failed:", e); }
+  } catch (e) { parts.push(sectionFailed(failedSections, "FOLLOWUPs", e)); }
 
   // --- Evidence / inbox (metadata + flags only, not full content) ---
   try {
@@ -168,7 +185,6 @@ export async function buildChatContext(): Promise<string> {
              (c.ai_notes ? `; notes: ${trunc(c.ai_notes, 120)}` : ""),
     );
     parts.push(`EVIDENCE / INBOX (${cards.length})\n${capList(lines) || "(none)"}`);
-  } catch (e) { console.error("[chat context] evidence failed:", e); }
-
-  return parts.join("\n\n");
+  } catch (e) { parts.push(sectionFailed(failedSections, "EVIDENCE", e)); }
+  return { context: parts.join("\n\n"), contractError, failedSections };
 }
