@@ -6,6 +6,7 @@ import {
   LayoutDashboard, Inbox, AlertCircle, Clock, FileText, Calendar,
   MailPlus,
   MailQuestionMark, 
+  Bot,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +18,7 @@ const nav = [
   { href: "/calendar", label: "Calendar", icon: Calendar },
   { href: "/follow-ups", label: "Follow-ups", icon: MailPlus },
   {href: "/rfi", label: "RFI", icon: MailQuestionMark },
+  {href: "/chat", label: "Assistant", icon: Bot },
   {href: "/settings", label: "Settings", icon: Clock }
 ];
 
