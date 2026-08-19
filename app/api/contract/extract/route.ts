@@ -8,7 +8,6 @@ import { extractPdfText } from "@/lib/pdf/extract";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Probe: open http://localhost:3000/api/contract/extract in the browser.
 export async function GET() {
   return NextResponse.json({ ok: true, route: "contract/extract is registered" });
 }
@@ -44,11 +43,19 @@ export async function POST(req: Request) {
     if (!file || file.type !== "application/pdf")
       return NextResponse.json({ error: "PDF only." }, { status: 400 });
 
+    stage = "read-bytes";
+    // Copy the bytes into an independent Buffer BEFORE pdf.js touches anything.
+    // pdf.js can detach the ArrayBuffer it reads; uploading a view of a detached
+    // buffer is what produced the 0-byte objects. Buffer.from allocates fresh
+    // memory here, and Buffer is also the body type supabase-js handles most
+    // reliably in Node. This copy is made first so extraction can't affect it.
+    const arrayBuffer = await file.arrayBuffer();
+    const pdfBuffer = Buffer.from(new Uint8Array(arrayBuffer));
+
     stage = "extract-text";
-    const bytes = new Uint8Array(await file.arrayBuffer());
     let text = "";
     try {
-      text = await extractPdfText(new Uint8Array(bytes)); // copy: pdf.js detaches the buffer
+      text = await extractPdfText(new Uint8Array(arrayBuffer)); // pdf.js may detach this view; pdfBuffer is already separate
     } catch (e: any) {
       console.error("extract-text:", e);
       return NextResponse.json(
@@ -62,9 +69,22 @@ export async function POST(req: Request) {
     stage = "storage-upload";
     const supabase = await createClient();
     const safeName = file.name.replace(/[^\w.\-]+/g, "_");
-    const path = `${projectId}/${crypto.randomUUID()}-${safeName}`;
-    const { error: upErr } = await supabase.storage.from("contracts").upload(path, bytes, { contentType: "application/pdf" });
+    const baseId = crypto.randomUUID();
+    const pdfPath = `${projectId}/${baseId}-${safeName}`;
+    const { error: upErr } = await supabase.storage
+      .from("contracts")
+      .upload(pdfPath, pdfBuffer, { contentType: "application/pdf" });
     if (upErr) { console.error("storage:", upErr); return NextResponse.json({ error: `Storage: ${upErr.message}`, stage }, { status: 500 }); }
+
+    stage = "storage-upload-text";
+    // Persist the extracted text next to the PDF so the chatbot never re-extracts.
+    // Non-fatal: if this sidecar fails, the PDF + values are still saved and the
+    // chatbot can fall back to the PDF. Logged loudly per the project rule.
+    const textPath = `${projectId}/${baseId}-contract.txt`;
+    const { error: txtErr } = await supabase.storage
+      .from("contracts")
+      .upload(textPath, Buffer.from(text, "utf8"), { contentType: "text/plain; charset=utf-8" });
+    if (txtErr) console.error("storage-text:", txtErr);
 
     stage = "ai-extract";
     let data: Record<string, any> = {};
@@ -82,7 +102,8 @@ export async function POST(req: Request) {
     } catch (e: any) { console.error("ai-extract:", e); }
 
     data.framework = data.framework || "FIDIC Red Book 1999";
-    data.file_path = path;
+    data.file_path = pdfPath;
+    if (!txtErr) data.text_path = textPath;
     return NextResponse.json({ data });
   } catch (e: any) {
     console.error(`contract/extract failed at stage "${stage}":`, e);

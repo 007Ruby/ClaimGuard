@@ -9,6 +9,12 @@ const SECTIONS: { href: string; label: string; description: string; icon: React.
     description: "The FIDIC document behind every deadline and claim.",
     icon: <FileText className="h-5 w-5" />,
   },
+  {
+    href: "/settings/specification",
+    label: "Specification",
+    description: "The specification that defines the works to be executed.",
+    icon: <FileText className="h-5 w-5" />,
+  }
   // Extend here as you add settings sections.
 ];
 
