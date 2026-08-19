@@ -11,8 +11,7 @@
 // Every section is independently try/caught: a failure logs and degrades that one
 // section to "(unavailable)" instead of breaking the whole context. 
 
-// Lists and the
-// contract text are capped to keep prompt size (cost/latency) bounded.
+// Lists and the contract text are capped to keep prompt size (cost/latency) bounded.
 
 import { createClient } from "@/lib/supabase/server";
 import { getSessionContext } from "@/lib/queries/session";
