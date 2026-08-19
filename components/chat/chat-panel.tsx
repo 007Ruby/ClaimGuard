@@ -12,8 +12,6 @@ import { Bot, User, Send } from "lucide-react";
 
 type Msg = { role: "user" | "assistant"; content: string };
 
-const [loadStatus, setLoadStatus] = useState<"ok" | "partial" | "error">("ok");
-const [failedSections, setFailedSections] = useState<string[]>([]);
 const EXAMPLES = [
   "What deadlines am I waiting on the Engineer for?",
   "Summarise my open claims and their status.",
@@ -59,6 +57,8 @@ function EmptyState({ onPick }: { onPick: (q: string) => void }) {
 }
 
 export function ChatPanel() {
+  const [loadStatus, setLoadStatus] = useState<"ok" | "partial" | "error">("ok");
+  const [failedSections, setFailedSections] = useState<string[]>([]);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
