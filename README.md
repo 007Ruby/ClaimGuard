@@ -1,36 +1,58 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ClaimGuard
 
-## Getting Started
+> An AI-assisted consultation and record-keeping tool for small construction contractors.
 
-First, run the development server:
+## Overview
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+ClaimGuard is a full-stack application designed to help smaller construction contractors keep track of site events, supporting evidence, contractual obligations, and potential claims.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Smaller contractors working as part of larger construction projects may not have the same resources as major contractors or developers when it comes to monitoring contractual requirements and preparing claims. ClaimGuard aims to make this process more organised and accessible by bringing relevant project information together in one place.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+The application allows users to maintain structured records of events occurring on site and associate them with supporting evidence, correspondence, and relevant contractual information. This information can then be used to identify important deadlines, surface potential contentions, and assist with drafting claims, follow-ups, and Requests for Information (RFIs).
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Key Features
 
-## Learn More
+- Structured recording of site events and project information
+- Association of events with supporting evidence and correspondence
+- Organisation of relevant contractual obligations and clauses
+- Identification of important deadlines and follow-up actions
+- AI-assisted analysis of project and contract information
+- Assistance with drafting claims and RFIs
+- Surfacing potentially important details and contentions for user review
 
-To learn more about Next.js, take a look at the following resources:
+## Technical Approach
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+ClaimGuard is being developed using:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- **Next.js**
+- **React**
+- **TypeScript**
+- **OpenAI API**
 
-## Deploy on Vercel
+A key design principle is to combine **structured application data with AI assistance**, rather than relying on an LLM to independently make contractual decisions.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Project information such as site events, evidence, correspondence, contractual clauses, and deadlines is represented in a structured form. The AI layer can then use this information as context when assisting the user.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The intended workflow is:
+
+```text
+Site Events
+     │
+     ├── Supporting Evidence
+     │
+     ├── Correspondence
+     │
+     └── Contractual Information
+              │
+              ▼
+       Structured Project Data
+              │
+              ▼
+        AI-Assisted Analysis
+              │
+      ┌───────┼────────┐
+      ▼       ▼        ▼
+   Deadlines  Issues   Drafts
+              │
+              ▼
+        User Review
