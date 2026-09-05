@@ -7,8 +7,56 @@ import { createClient } from "@/lib/supabase/server";
 import type { EventFlag } from "@/components/events/event-status-flag";
 import type { WhatsNextItem } from "@/components/whats-next/obligation-item";
 import { STATUS_LABEL, type EventStatus, type Remedy, type Urgency, resolveObligation,
-  type ContractContext} from "@/lib/fidic/engine";
+type ContractContext} from "@/lib/fidic/engine";
+import { projectDayOverrides, isStoredContractProfile } from "@/lib/contract/profile-adapter";
+import type { EngineContractContext } from "@/lib/contract/profile-adapter";
+import type { LiveDigestItem } from "@/lib/chat/assemble";
+import { conceptForEngineStep } from "@/lib/contract/profile-adapter";
 
+const PARTIES = new Set(["contractor", "engineer", "employer"]);
+
+function digestStatus(f: EventFlag): LiveDigestItem["status"] {
+  if (f.timeBarred) return "time_barred";
+  if (f.status === "overdue") return "overdue";
+  // 'awaiting' is an obligation on the other party that isn't late yet — upcoming, not due.
+  if (f.status === "awaiting") return "upcoming";
+  return f.urgency === "critical" || f.urgency === "soon" ? "due_soon" : "upcoming";
+}
+
+export async function loadChatDigest(): Promise<LiveDigestItem[]> {
+  const supabase = await createClient();
+  const [{ data: events }, { data: contractRows }] = await Promise.all([
+    supabase.from("events").select("*"),
+    supabase.from(CONTRACT_TABLE).select("project_id, commencement_date, data"),
+  ]);
+
+  const contracts = new Map<string, any>();
+  (contractRows ?? []).forEach((c: any) => contracts.set(c.project_id, c));
+
+  const out: LiveDigestItem[] = [];
+  (events ?? []).forEach((ev: any) => {
+    const row = ev as EventRow;
+    const flag = eventFlag(row, contracts);
+    if (!OPEN.includes(flag.status)) return; // open obligations only — closed ones are history
+
+    const party = (flag.actionParty ?? "").toLowerCase();
+    out.push({
+      eventId: row.id,
+      eventTitle: row.title ?? "(untitled event)",
+      conceptKey: flag.stepId ? conceptForEngineStep(flag.stepId) : null,
+      label: flag.actionLabel ?? "",
+      description: flag.actionDescription ?? null,
+      dueDate: flag.actionDueDate ?? null,
+      daysRemaining: flag.daysRemaining ?? null,
+      status: digestStatus(flag),
+      owner: PARTIES.has(party) ? (party as LiveDigestItem["owner"]) : "contractor",
+      clauseRef: flag.clauseRef ?? null,
+      outstandingAmount: flag.outstandingAmount ?? null,
+    });
+  });
+
+  return out;
+}
 // You ran migration 0005, so the table is project_contracts.
 const CONTRACT_TABLE = "project_contracts";
 const URGENCY_RANK: Record<string, number> = { critical: 0, soon: 1, ok: 2, none: 3 };
@@ -47,18 +95,28 @@ function eventDate(ev: EventRow): string {
   return d.slice(0, 10);
 }
 
+type ContractRow = {
+  commencement_date: string | null;
+  data: { contractProfile?: unknown; dayOverrides?: Record<string, number> } | null;
+};
+
 function contextFor(
   projectId: string,
-  contracts: Map<string, { commencement_date: string | null; data: any }>,
+  contracts: Map<string, ContractRow>,
   fallbackDate: string,
-): ContractContext {
+): EngineContractContext {
   const c = contracts.get(projectId);
+  const profile = c?.data?.contractProfile;
+
   return {
     commencementDate: c?.commencement_date ?? fallbackDate,
-    dayOverrides: c?.data?.dayOverrides ?? {},
+    // Profile is the source of truth; project it to the engine's dayOverrides at read time.
+    // Legacy fallback keeps pre-migration rows working.
+    dayOverrides: isStoredContractProfile(profile)
+      ? projectDayOverrides(profile)
+      : (c?.data?.dayOverrides ?? {}),
   };
 }
-
 export function eventFlag(
   ev: EventRow,
   contracts: Map<string, { commencement_date: string | null; data: any }>,

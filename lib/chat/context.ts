@@ -19,6 +19,10 @@ import { listClaims } from "@/lib/queries/claims";
 import { listEventsWithEvidence } from "@/lib/queries/events";
 import { listAwaitingEvents, listSavedFollowUps } from "@/lib/queries/follow-ups";
 import { listInboxCards } from "@/lib/queries/inbox";
+import { assembleContext, buildIdentity } from "./assemble";
+import { asProjectContractData } from "@/lib/contract/contract-data";
+import { loadChatDigest } from "@/lib/fidic/get-obligations";
+
 
 const CONTRACT_TEXT_CHAR_CAP = 30000;
 const MAX_ITEMS = 60;
@@ -59,52 +63,40 @@ function contractTerms(data: Record<string, any>): string {
   ].join("\n");
 }
 
-export async function buildChatContext(): Promise<{
-  context: string;
-  contractError: boolean;
-  failedSections: string[];
-}> {
+export async function buildChatContext(question: string) {
   const { projectId } = await getSessionContext();
   const supabase = await createClient();
-  const parts: string[] = [];
   const failedSections: string[] = [];
   let contractError = false;
+  const parts: string[] = [];
 
-  // --- Contract: key terms + full text sidecar ---
-  // --- Contract: key terms + full text sidecar ---
+  // --- contract profile: the load-bearing one -------------------------------
   try {
-    const { data: contract, error: cErr } = await supabase
-      .from("project_contracts").select("data").eq("project_id", projectId).maybeSingle();
-    if (cErr) throw cErr; // a query error must NOT masquerade as "no contract uploaded"
-    const data = (contract?.data as Record<string, any>) ?? null;
-    if (!data) {
-      // Normal state for a new project — NOT an error. Bot explains, doesn't alarm.
-      parts.push("CONTRACT\n(no contract uploaded yet)");
-    } else {
-      parts.push(contractTerms(data));
-      const textPath = data.text_path as string | undefined;
-      if (textPath) {
-        try {
-          const { data: blob, error } = await supabase.storage.from("contracts").download(textPath);
-          if (error) throw error;
-          let text = (await blob.text()).trim();
-          if (text.length > CONTRACT_TEXT_CHAR_CAP)
-            text = text.slice(0, CONTRACT_TEXT_CHAR_CAP) + "\n…[contract text truncated]";
-          if (text) parts.push("CONTRACT TEXT (reference)\n" + text);
-        } catch (e) {
-          // Text sidecar is reference prose; the authoritative TERMS above still loaded,
-          // so this is a per-section note, NOT a hard stop.
-          console.error("[chat context] contract text download failed:", e);
-          parts.push("CONTRACT TEXT\n(⚠ could not be loaded this session — the key terms above are still usable)");
-        }
-      } else {
-        parts.push("CONTRACT TEXT\n(this contract predates full-text storage — only extracted key terms above are usable)");
-      }
-    }
+    const { data: row } = await supabase
+      .from("project_contracts")
+      .select("commencement_date, data")   // ← the date lives here, not in a separate call
+      .eq("project_id", projectId)
+      .maybeSingle();
+
+    const data = asProjectContractData(row?.data);
+    if (!data?.contractProfile) throw new Error("No contract profile on this project.");
+
+    const assembled = await assembleContext({
+      question,
+      projectId,
+      identity: buildIdentity({
+        projectName: data.name ?? "This project",
+        data,
+        commencementDate: row?.commencement_date ?? null,
+      }),
+      profile: data.contractProfile,
+      digest: await loadChatDigest(),
+    });
+
+    parts.push(...assembled.blocks);
   } catch (e) {
-    console.error("[chat context] contract load failed:", e);
-    contractError = true; // load-bearing failure → route refuses project answers
-    parts.push("CONTRACT\n(⚠ COULD NOT BE LOADED this session — a loading/technical error)");
+    console.error("[chat/context] contract load failed:", e);
+    contractError = true;
   }
 
   // --- Events (with linked evidence) ---

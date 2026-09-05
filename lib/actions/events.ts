@@ -19,7 +19,7 @@ export async function createEvent(formData: FormData): Promise<{ error?: string;
   const title = String(formData.get("title") ?? "").trim();
   if (!title) return { error: "Title is required." };
 
-   const { data, error } = await supabase.from("events").insert({
+  const { data, error } = await supabase.from("events").insert({
     org_id: orgId, project_id: projectId, title,
     description: String(formData.get("description") ?? "").trim() || null,
     type: normalizeType(String(formData.get("type") ?? "other")),
