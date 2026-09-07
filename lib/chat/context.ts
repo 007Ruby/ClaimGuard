@@ -22,6 +22,9 @@ import { listInboxCards } from "@/lib/queries/inbox";
 import { assembleContext, buildIdentity } from "./assemble";
 import { asProjectContractData } from "@/lib/contract/contract-data";
 import { loadChatDigest } from "@/lib/fidic/get-obligations";
+import OpenAI from "openai";
+
+
 
 
 const CONTRACT_TEXT_CHAR_CAP = 30000;
@@ -81,17 +84,20 @@ export async function buildChatContext(question: string) {
     const data = asProjectContractData(row?.data);
     if (!data?.contractProfile) throw new Error("No contract profile on this project.");
 
-    const assembled = await assembleContext({
-      question,
-      projectId,
-      identity: buildIdentity({
-        projectName: data.name ?? "This project",
-        data,
-        commencementDate: row?.commencement_date ?? null,
-      }),
-      profile: data.contractProfile,
-      digest: await loadChatDigest(),
-    });
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+const assembled = await assembleContext({
+  question,
+  projectId,
+  identity: buildIdentity({
+    projectName: data.name ?? "This project",
+    data,
+    commencementDate: row?.commencement_date ?? null,
+  }),
+  profile: data.contractProfile,
+  digest: await loadChatDigest(),
+  retrievalDeps: { supabase, openai },   // ← the missing property
+});
 
     parts.push(...assembled.blocks);
   } catch (e) {

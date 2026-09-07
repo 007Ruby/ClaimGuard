@@ -1,41 +1,45 @@
 /**
  * lib/contract/types.ts
  *
- * Core types for the ContractProfile — the single per-project object that both the
- * deterministic engine and the bot read from.
+ * Core types for the ContractProfile — the single per-project object the deterministic engine
+ * and the bot both read from.
  *
- * TWO LAYERS, held FLAT and joined by concept key:
+ * TWO LAYERS, held flat and joined by concept key:
  *   parameters : machine-read numbers + typed consequences. The engine consumes ONLY this.
- *   clauseMap  : verbatim prose + the contract's own naming. The bot retrieves and CITES
- *                from this. The engine never reads it.
+ *   clauseMap  : verbatim prose from the uploaded document. The bot cites from this. The
+ *                engine never reads it.
  *
- * The layers are flat (two top-level maps) rather than nested per concept for one reason:
- * it makes the engine invariant STRUCTURAL. `EngineProfileView` below is
- * `Pick<StoredContractProfile, 'parameters'>` — the engine is handed an object that does
- * not contain clause prose, so it cannot read prose even by mistake. Nesting
- * `{ parameters, clause }` under each concept would put the prose one property access away
- * and demote the invariant to a code-review convention.
+ * Flat rather than nested per concept so the engine invariant is STRUCTURAL: EngineProfileView
+ * below is a Pick that omits clauseMap entirely, so engine-facing code cannot reach clause
+ * prose even by mistake.
  *
- * STORED vs RESOLVED:
- *   StoredContractProfile   — what persists in project_contracts.data.contractProfile.
- *                             SPARSE: only diffs from the FIDIC defaults (the dayOverrides
- *                             philosophy, generalised).
- *   ResolvedContractProfile — the materialised view for the Workflows tab and the bot.
- *                             Every concept present and fully populated, and NESTED per
- *                             concept because that is what those consumers actually want.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * PARAMETER RESOLUTION IS THREE LAYERS, highest wins:
  *
- * FIDIC is not baked in here. It is one *seed* of this shape (fidic-defaults.ts). A custom
- * contract produces the same shape via extraction.
+ *   manual    — the user typed it on the Workflows page
+ *   contract  — what this contract's document says (particulars, appendix, or a bespoke form)
+ *   general   — FIDIC General Conditions. Present ONLY for a FIDIC profile.
  *
- * String-literal unions (via `as const`) instead of TS `enum`, so values exist at runtime
- * for iteration and validation, and tree-shake cleanly.
+ * `general` is never stored: it is the FIDIC_DEFAULTS constant. That is why both stored maps
+ * below are sparse, and why the Workflows dialog can show "GC says 28, your contract says 21"
+ * without ever having persisted 28.
+ *
+ * For a non-FIDIC profile there is no `general` layer, so a concept extraction did not find
+ * resolves to UNRESOLVED — not to a FIDIC value. This is the most important behaviour in this
+ * file: a bespoke contract with no notice provision must never silently inherit a 28-day
+ * condition precedent and compute a real deadline from it.
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * CLAUSE TEXT comes from the user's upload in both modes. A conformed Conditions of Contract
+ * prints the General Conditions, the Particular Conditions and the Appendix to Tender in one
+ * document, so the upload is both the extraction source and the retrieval corpus. ClaimGuard
+ * ships no FIDIC prose — only the numbers in fidic-defaults.ts.
  */
 
 // ---------------------------------------------------------------------------
-// Concept keys — the stable internal address space (the "DNS zone").
-// These never display and never change. Extraction maps each contract's clauses ONTO these
-// keys; the engine resolves by key, never by clause number, so a custom contract's own
-// numbering is irrelevant to computation.
+// Concept keys — the stable internal address space (the "DNS zone"). Extraction maps each
+// contract's clauses ONTO these; the engine resolves by key, never by clause number, so a
+// contract's own numbering is irrelevant to computation.
 // ---------------------------------------------------------------------------
 export const CONCEPT_KEYS = [
   'claim_notice',
@@ -52,19 +56,12 @@ export const CONCEPT_KEYS = [
 
 export type ConceptKey = (typeof CONCEPT_KEYS)[number];
 
-// ---------------------------------------------------------------------------
-// Owner — whose obligation / right this is. Drives workflow routing:
-//   contractor deadline  -> claim / payment prompts
-//   counterparty default -> follow-ups
-// ---------------------------------------------------------------------------
 export const OWNERS = ['contractor', 'engineer', 'employer'] as const;
 export type Owner = (typeof OWNERS)[number];
 
 // ---------------------------------------------------------------------------
-// Consequence — the load-bearing enum. Governs ENGINE BEHAVIOUR, not just display.
-// See CONSEQUENCE_BEHAVIOUR in concepts.ts for what each one does.
-// `null` means "no expiry consequence" — used only by triggers (the Statement submission
-// starts a clock but has no deadline of its own).
+// Consequence — governs ENGINE BEHAVIOUR, not just display. See CONSEQUENCE_BEHAVIOUR in
+// concepts.ts. `null` means no expiry consequence (triggers only).
 // ---------------------------------------------------------------------------
 export const CONSEQUENCE_TYPES = [
   'condition_precedent',  // expiry => entitlement LOST (time bar)
@@ -76,124 +73,147 @@ export const CONSEQUENCE_TYPES = [
 export type ConsequenceType = (typeof CONSEQUENCE_TYPES)[number];
 
 // ---------------------------------------------------------------------------
-// Anchor — the real-world event a clock starts from. As important as duration.
-// Most anchors are user-confirmed dates; payment_due_date is DERIVED from another
-// concept's computed output. Editors constrain the anchor to a concept's `validAnchors`
-// (concepts.ts) — never free text.
-//
-// RENAME NOTE: these literals are the canonical set. If concepts.ts / any extraction
-// prompt still uses `after_consultation`, `contractor_elects` or `instruction_needed_by`,
-// update them to `consultation_complete`, `suspension_notice_served`,
-// `instruction_required` respectively. Grep for all seven before shipping.
+// Anchor — the real-world event a clock starts from. As important as duration. Editors
+// constrain to a concept's validAnchors (concepts.ts); never free text.
 // ---------------------------------------------------------------------------
 export const ANCHORS = [
-  'contractor_awareness',     // user-confirmed: when the contractor became aware of the event
-  'statement_received',       // user-confirmed: Engineer's receipt of the Statement (payment anchor)
-  'payment_due_date',         // DERIVED: the computed payment-due date (feeds financing charges)
-  'claim_received',           // user-confirmed: Engineer's receipt of the claim / particulars
-  'consultation_complete',    // user-confirmed: consultation concluded (determination)
+  'contractor_awareness',     // user-confirmed: became aware of the event
+  'statement_received',       // user-confirmed: Engineer's receipt of the Statement
+  'payment_due_date',         // DERIVED: the computed payment-due date
+  'claim_received',           // user-confirmed: Engineer's receipt of the claim
+  'consultation_complete',    // user-confirmed: consultation concluded
   'suspension_notice_served', // user-confirmed: contractor served the suspension notice
   'instruction_required',     // user-confirmed: when the drawing / instruction was needed
 ] as const;
 export type Anchor = (typeof ANCHORS)[number];
 
-// ---------------------------------------------------------------------------
-// Kind — the shape of a concept, so engine + UI know how to treat it.
-//   deadline : a lapsing clock (most concepts)
-//   trigger  : a real-world event that anchors other clocks (no deadline of its own)
-//   right    : a waiting period that UNLOCKS an action (suspension)
-//   accrual  : charges that begin accruing after a date (financing)
-// ---------------------------------------------------------------------------
 export const CONCEPT_KINDS = ['deadline', 'trigger', 'right', 'accrual'] as const;
 export type ConceptKind = (typeof CONCEPT_KINDS)[number];
 
 // ---------------------------------------------------------------------------
-// Financing rate (financing_charges only). The GC default is a FORMULA, not a number, and
-// Particular Conditions commonly amend it — so it is data, resolved deterministically. The
-// engine does arithmetic on a confirmed figure; it never invents a rate.
+// Financing rate. The GC default is a FORMULA, not a number, and Particular Conditions
+// commonly amend it — so it is data. The engine does arithmetic on a confirmed figure; it
+// never invents a rate.
 // ---------------------------------------------------------------------------
 export interface FinancingRate {
   basis: 'central_bank_plus' | 'fixed_annual';
-  /** GC 14.8: 3 percentage points above the central-bank discount rate of the country of
-   *  the payment currency. Percentage POINTS, not basis points. */
+  /** Percentage POINTS above the central-bank discount rate. Not basis points. */
   marginPoints?: number;
-  /** If a PC fixes a flat annual rate instead, e.g. 0.09 for 9% p.a. */
+  /** If a particular fixes a flat annual rate instead, e.g. 0.09 for 9% p.a. */
   fixedAnnualRate?: number;
   compounding: 'monthly' | 'annual' | 'simple';
 }
 
 // ---------------------------------------------------------------------------
-// Challenge window (determination only, when a PC amends it). The UAE "flip": an
-// Engineer-side nominal window becomes a CONTRACTOR-side time bar — miss the challenge and
-// the determination is final and binding. Absent from the FIDIC defaults (GC has no such
-// flip). This is the field that lets an amended SC 3.5 be modelled as data.
-//
-// NOT YET CONSUMED BY THE ENGINE — see the header of profile-adapter.ts.
+// Challenge window (determination only). The UAE flip: an Engineer-side nominal window
+// becomes a CONTRACTOR-side time bar — miss the challenge and the determination is final.
+// Absent from the FIDIC defaults. NOT YET CONSUMED BY THE ENGINE (see profile-adapter.ts).
 // ---------------------------------------------------------------------------
 export interface ChallengeWindow {
   days: number;
-  owner: Owner;                 // typically 'contractor'
-  consequence: ConsequenceType; // typically 'condition_precedent'
+  owner: Owner;
+  consequence: ConsequenceType;
 }
 
 // ---------------------------------------------------------------------------
-// PARAMETERS LAYER — the ONLY thing the engine reads.
+// PARAMETERS LAYER — the only thing the engine reads.
 //
-// ConceptParameters is COMPLETE: it is the shape of a FIDIC default and of a resolved
-// value. ConceptParametersOverride is the SPARSE stored shape.
+// ConceptParameters is COMPLETE (the shape of a FIDIC default). ConceptParametersOverride is
+// the SPARSE stored shape used by both the `contract` and `manual` layers.
 //
 // `undefined` vs `null` matters and the resolver distinguishes them:
-//   undefined -> inherit the FIDIC default
-//   null      -> explicitly nominal / not applicable (a real override)
+//   undefined -> defer to the layer below
+//   null      -> explicitly nominal / not applicable (a real, deliberate value)
 // ---------------------------------------------------------------------------
 export interface ConceptParameters {
   owner: Owner;
   anchor: Anchor | null;               // null for triggers
-  durationDays: number | null;         // null = nominal / "reasonable time" (no hard clock)
+  durationDays: number | null;         // null = nominal / reasonable time (no hard clock)
   consequence: ConsequenceType | null; // null = no expiry consequence (triggers)
-
-  // Sparse, concept-specific extensions:
-  financingRate?: FinancingRate;       // financing_charges
-  challengeWindow?: ChallengeWindow;   // determination (PC amendment)
+  financingRate?: FinancingRate;
+  challengeWindow?: ChallengeWindow;
 }
 
 export type ConceptParametersOverride = Partial<ConceptParameters>;
 
+/** Which layer a resolved value came from. `unresolved` = no layer supplied it. */
+export const PARAMETER_LAYERS = ['manual', 'contract', 'general', 'unresolved'] as const;
+export type ParameterLayer = (typeof PARAMETER_LAYERS)[number];
+
+/**
+ * The two STORED layers. `general` is deliberately absent — it is the FIDIC_DEFAULTS constant
+ * for a FIDIC profile and nothing at all for a bespoke one.
+ *
+ * Keeping `contract` and `manual` separate rather than collapsing edits into one map is what
+ * lets the UI answer "did I change this, or did the contract say it?" — and lets a user revert
+ * an edit to what the document says by deleting one entry.
+ */
+export interface ProfileParameters {
+  /** What extraction read from the uploaded document. Written by extraction, not by the user. */
+  contract: Partial<Record<ConceptKey, ConceptParametersOverride>>;
+  /** What the user typed on the Workflows page. Overrides `contract`. */
+  manual: Partial<Record<ConceptKey, ConceptParametersOverride>>;
+}
+
 // ---------------------------------------------------------------------------
-// CLAUSE-TEXT LAYER — the three naming layers + provenance + retrievable prose.
-//
-//   canonicalName      : ClaimGuard's stable label ("Notice of Claim"). FIDIC-flavoured but
-//                        NOT a FIDIC clause number. Stored (not just derived from
-//                        concepts.ts) so a project can ALIAS it to its own terminology.
-//   contractLabel      : the contract's OWN heading, verbatim.
-//   sourceClauseRef    : the contract's OWN clause number, for citation.
-//   text               : verbatim clause prose — the retrievable material (Tier 2 exact,
-//                        Tier 3 corpus). Populated for FIDIC seeds from ClaimGuard's
-//                        licensed FIDIC asset at seed time, never hardcoded in this repo.
-//   extractedParameters: what extraction READ from this clause, frozen at extraction time.
-//                        Never updated when a human edits the live parameter — that is the
-//                        whole point: it is the baseline checkDivergence() compares against.
-//   confirmed          : true once a human has proofread this entry.
+// CLAUSE-TEXT LAYER — verbatim prose from the upload, with the contract's own naming.
 // ---------------------------------------------------------------------------
+
+/** One passage of contract prose, as printed. */
+export interface ClauseExcerpt {
+  /** The document's own heading, verbatim. */
+  contractLabel: string | null;
+  /** The document's own clause number, for citation. */
+  sourceClauseRef: string | null;
+  text: string;
+  /** Page in the source PDF, for "open the contract here". */
+  page: number | null;
+}
+
+/**
+ * A concept's clause material.
+ *
+ *   text / contractLabel / sourceClauseRef : the OPERATIVE wording — the General Conditions
+ *          clause where unamended, the Particular Condition where one amends it. This is what
+ *          Tier 2 puts in front of the bot and what the user proofreads.
+ *   general : the General Conditions clause this replaced, kept when a particular amends it,
+ *          so the Workflows dialog can show both. Null when nothing was amended.
+ *   extractedParameters : what extraction READ from the operative wording, frozen at
+ *          extraction time. Never rewritten when a human edits a live parameter — that
+ *          snapshot is the baseline checkDivergence() measures against.
+ */
 export interface ClauseTextEntry {
   canonicalName: string;
   contractLabel: string | null;
   sourceClauseRef: string | null;
   text: string | null;
+  page: number | null;
+  general: ClauseExcerpt | null;
   extractedParameters?: ConceptParametersOverride;
   confirmed: boolean;
 }
 
-// ---------------------------------------------------------------------------
-// A clause that matched NO concept — kept verbatim for the record + Tier 3 retrieval.
-// Carries no parameters, drives no deadline, is invisible to the engine.
-// ---------------------------------------------------------------------------
+/** A clause that matched no concept. Kept verbatim for the record and Tier 3. */
 export interface UnmappedClause {
   contractLabel: string | null;
   sourceClauseRef: string | null;
   text: string;
+  page: number | null;
 }
 
+// ---------------------------------------------------------------------------
+// Profile metadata
+// ---------------------------------------------------------------------------
+
+/**
+ * The fork the user makes before uploading. It cannot be inferred: a UAE developer's conformed
+ * Conditions of Contract is FIDIC with amendments printed inline, and reads exactly like a
+ * bespoke form to any classifier.
+ *
+ *   fidic  — extraction runs as a DIFF against the General Conditions. Anything not found
+ *            stays at the GC value, which is correct.
+ *   custom — extraction runs a FULL READ. Anything not found is UNRESOLVED. No deadline.
+ */
 export type ProfileType = 'fidic' | 'custom';
 
 export interface ProfileMeta {
@@ -204,60 +224,64 @@ export interface ProfileMeta {
   updatedAt: string; // ISO
 }
 
-// ---------------------------------------------------------------------------
-// THE STORED PROFILE — what persists in project_contracts.data.contractProfile.
-//
-// Sparse throughout. `absentConcepts` inverts the old per-concept `present` flag so the
-// common case (every concept present) stores nothing: a concept is present unless it is
-// listed here.
-// ---------------------------------------------------------------------------
-export interface StoredContractProfile {
-  meta: ProfileMeta;
-  parameters: Partial<Record<ConceptKey, ConceptParametersOverride>>;
-  clauseMap: Partial<Record<ConceptKey, ClauseTextEntry>>;
-  /** Concepts this contract does not have at all. Engine computes nothing for them; the
-   *  Workflows diagram renders the node as absent. */
-  absentConcepts: ConceptKey[];
-  unmappedClauses: UnmappedClause[];
-  /** Free-text edge-case notes that don't fit a parameter. Surfaced to the bot as context.
-   *  NEVER written back to clause text. */
-  notes: string | null;
-}
-
-/**
- * Input to the seed helpers. Deliberately has no `contractId`: the profile is stored ON the
- * project_contracts row (data.contractProfile), so the row's own id is the contract id and
- * duplicating it inside the JSON only creates a field that can drift.
- */
 export interface ContractProfileSeedInput {
-  /** Override the default display label, e.g. "Aldar bespoke form". */
   baseLabel?: string;
   /** ISO timestamp for createdAt/updatedAt. Injectable so seeds are testable. */
   now?: string;
 }
 
 // ---------------------------------------------------------------------------
-// THE ENGINE'S VIEW — the load-bearing type of this file.
-//
-// Every engine-facing function takes THIS, not StoredContractProfile. Passing a full
-// profile still type-checks (it is a superset), but inside the function body `clauseMap`
-// is not on the type, so the engine cannot reach clause prose. That is the deterministic
-// invariant made structural rather than conventional.
+// THE STORED PROFILE — persisted in project_contracts.data.contractProfile.
 // ---------------------------------------------------------------------------
-export type EngineProfileView = Pick<StoredContractProfile, 'parameters'>;
+export interface StoredContractProfile {
+  meta: ProfileMeta;
+  parameters: ProfileParameters;
+  clauseMap: Partial<Record<ConceptKey, ClauseTextEntry>>;
+  /** Concepts this contract does not have at all. Engine computes nothing for them. */
+  absentConcepts: ConceptKey[];
+  unmappedClauses: UnmappedClause[];
+  /** Free-text edge cases. Surfaced to the bot; NEVER written back to clause text. */
+  notes: string | null;
+}
 
 // ---------------------------------------------------------------------------
-// THE RESOLVED PROFILE — the materialised view for the Workflows tab and the bot.
-// Produced by resolveProfile(). Nested per concept, because those consumers want
-// everything about one concept in one place. Never persisted, never given to the engine.
+// THE ENGINE'S VIEW — the load-bearing type of this file.
+//
+// `meta` is included because the resolver needs profileType to decide whether the FIDIC
+// baseline applies. `clauseMap` is NOT, so engine-facing code physically cannot read prose.
 // ---------------------------------------------------------------------------
+export type EngineProfileView = Pick<StoredContractProfile, 'parameters' | 'meta'>;
+
+// ---------------------------------------------------------------------------
+// THE RESOLVED VIEW — materialised for the Workflows page and the bot. Nested per concept,
+// because those consumers want everything about one concept together. Never persisted.
+// ---------------------------------------------------------------------------
+
+/** Per-field provenance, so the UI can label where every number came from. */
+export type ParameterProvenance = Record<
+  'owner' | 'anchor' | 'durationDays' | 'consequence',
+  ParameterLayer
+>;
+
+/**
+ * A resolved parameter set.
+ *
+ * `resolved: false` means NO layer supplied this concept — the contract may not contain it, or
+ * extraction may not have found it. Distinct from `durationDays: null`, which is a known,
+ * deliberate "nominal / reasonable time". The engine must compute nothing for an unresolved
+ * concept, and the UI must show it as needing attention rather than as a value.
+ */
+export interface ResolvedParameters extends ConceptParameters {
+  resolved: boolean;
+  provenance: ParameterProvenance;
+}
+
 export interface ResolvedConcept {
   key: ConceptKey;
   present: boolean;
-  parameters: ConceptParameters;
-  /** null when the contract has no clause text mapped to this concept yet. */
+  parameters: ResolvedParameters;
   clause: ClauseTextEntry | null;
-  /** Live parameter fields that differ from what extraction read. Information only. */
+  /** Live fields differing from what extraction read. Information only, never reconciled. */
   diverged: (keyof ConceptParameters)[];
 }
 

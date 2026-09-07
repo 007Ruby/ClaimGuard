@@ -1,94 +1,172 @@
 // lib/contract/resolve.ts
 //
-// THE single resolver for the parameters layer, plus divergence and seed helpers. Every
-// consumer — the engine adapter, the Workflows UI, the extraction confirm step — resolves
-// through resolveParameter(), so there is exactly one place the sparse-override →
-// FIDIC-default merge happens. This is the generalisation of the old resolveDays(): FIDIC is
-// no longer a baseline baked into the engine, it is just the fallback record this file reads.
+// THE single resolver for the parameters layer. Every consumer — the engine adapter, the
+// Workflows UI, the bot's context assembler — resolves through resolveParameter(), so there is
+// exactly one place the three-layer merge happens.
 //
-// Note the signature of resolveParameter: it takes EngineProfileView, not a full profile. It
-// physically cannot read clause prose, and neither can anything downstream of it.
+// LAYERS, highest wins:
+//   manual    profile.parameters.manual[key]    — the user typed it
+//   contract  profile.parameters.contract[key]  — extraction read it from the document
+//   general   FIDIC_DEFAULTS[key]               — ONLY when meta.profileType === 'fidic'
+//
+// The last line is the whole point. For a bespoke contract there is no general layer, so a
+// field no layer supplies comes back UNRESOLVED rather than silently inheriting FIDIC. An
+// unresolved concept computes no deadline and shows on the Workflows page as needing
+// attention. This is the difference between "we don't know" and "28 days", and conflating them
+// is how a system invents a time bar the contract never contained.
 
 import type {
   ConceptKey,
   ConceptParameters,
+  ConceptParametersOverride,
   ContractProfileSeedInput,
   EngineProfileView,
+  ParameterLayer,
+  ParameterProvenance,
+  ProfileType,
   ResolvedConcept,
   ResolvedContractProfile,
+  ResolvedParameters,
   StoredContractProfile,
 } from './types';
 import { CONCEPT_KEYS } from './types';
 import { CONCEPTS } from './concepts';
 import { FIDIC_DEFAULTS } from './fidic-defaults';
 
+type CoreField = keyof ParameterProvenance;
+const CORE_FIELDS: readonly CoreField[] = ['owner', 'anchor', 'durationDays', 'consequence'];
+
 /**
- * resolveParameter — merge a profile's sparse override over the FIDIC default, field by
- * field, for one concept.
- *
- * `undefined` means "inherit the default"; `null` is a MEANINGFUL override (explicit
- * nominal / not-applicable) and is preserved. That distinction is why the nullable fields
- * use an explicit `!== undefined` test rather than `??`.
+ * Fallbacks used when a field is unresolved. The engine must never act on these — they exist
+ * so the type stays complete and the UI has something inert to render. `resolved: false` and
+ * per-field provenance of 'unresolved' are the real signal; consult those, not these values.
  */
-export function resolveParameter(
-  profile: EngineProfileView,
+const INERT: Pick<ConceptParameters, CoreField> = {
+  owner: 'contractor',
+  anchor: null,
+  durationDays: null,
+  consequence: null,
+};
+
+/**
+ * pick — walk the layers for one field and report which one supplied it.
+ *
+ * `undefined` defers to the next layer down. `null` does NOT: an explicit null is a deliberate
+ * "nominal / not applicable" and stops the walk. That distinction is why this cannot be a
+ * chain of `??`.
+ */
+function pick<F extends CoreField>(
   key: ConceptKey,
-): ConceptParameters {
-  const base = FIDIC_DEFAULTS[key];
-  const o = profile.parameters[key] ?? {};
+  field: F,
+  profile: EngineProfileView,
+  general: ConceptParameters | null,
+): { value: ConceptParameters[F]; layer: ParameterLayer } {
+  const manual = profile.parameters.manual[key]?.[field];
+  if (manual !== undefined) return { value: manual, layer: 'manual' };
 
-  const merged: ConceptParameters = {
-    owner: o.owner ?? base.owner,
-    anchor: o.anchor !== undefined ? o.anchor : base.anchor,
-    durationDays: o.durationDays !== undefined ? o.durationDays : base.durationDays,
-    consequence: o.consequence !== undefined ? o.consequence : base.consequence,
-  };
+  const contract = profile.parameters.contract[key]?.[field];
+  if (contract !== undefined) return { value: contract, layer: 'contract' };
 
-  // Optional extensions assigned conditionally so we never write an explicit `undefined`
-  // onto an optional property (keeps this valid under exactOptionalPropertyTypes).
-  const financingRate = o.financingRate ?? base.financingRate;
-  if (financingRate) merged.financingRate = financingRate;
+  if (general) return { value: general[field], layer: 'general' };
 
-  const challengeWindow = o.challengeWindow ?? base.challengeWindow;
-  if (challengeWindow) merged.challengeWindow = challengeWindow;
-
-  return merged;
+  return { value: INERT[field] as ConceptParameters[F], layer: 'unresolved' };
 }
 
-/** Back-compat shim for call sites that only want the day count (the old resolveDays()). */
+/** The general layer for a profile: FIDIC's numbers, or nothing at all. */
+export function generalLayer(profileType: ProfileType, key: ConceptKey): ConceptParameters | null {
+  return profileType === 'fidic' ? FIDIC_DEFAULTS[key] : null;
+}
+
+/**
+ * resolveParameter — merge the layers for one concept.
+ *
+ * Takes EngineProfileView, not a full profile: it cannot read clause prose, and neither can
+ * anything downstream of it.
+ */
+export function resolveParameter(profile: EngineProfileView, key: ConceptKey): ResolvedParameters {
+  const general = generalLayer(profile.meta.profileType, key);
+
+  // Resolved field by field rather than in a generic loop: a loop over a union of field names
+  // needs a cast to keep TypeScript happy about the value type, and a cast here would be
+  // exactly where a wrong value could slip through unnoticed.
+  const owner = pick(key, 'owner', profile, general);
+  const anchor = pick(key, 'anchor', profile, general);
+  const durationDays = pick(key, 'durationDays', profile, general);
+  const consequence = pick(key, 'consequence', profile, general);
+
+  const provenance: ParameterProvenance = {
+    owner: owner.layer,
+    anchor: anchor.layer,
+    durationDays: durationDays.layer,
+    consequence: consequence.layer,
+  };
+
+  // A concept is resolved when SOME layer spoke for it. All four unresolved means nothing
+  // anywhere describes this concept.
+  const resolved = CORE_FIELDS.some((f) => provenance[f] !== 'unresolved');
+
+  const out: ResolvedParameters = {
+    owner: owner.value,
+    anchor: anchor.value,
+    durationDays: durationDays.value,
+    consequence: consequence.value,
+    resolved,
+    provenance,
+  };
+
+  // Optional extensions assigned conditionally so no explicit `undefined` is written onto an
+  // optional property — required under exactOptionalPropertyTypes.
+  const financingRate =
+    profile.parameters.manual[key]?.financingRate ??
+    profile.parameters.contract[key]?.financingRate ??
+    general?.financingRate;
+  if (financingRate) out.financingRate = financingRate;
+
+  const challengeWindow =
+    profile.parameters.manual[key]?.challengeWindow ??
+    profile.parameters.contract[key]?.challengeWindow ??
+    general?.challengeWindow;
+  if (challengeWindow) out.challengeWindow = challengeWindow;
+
+  return out;
+}
+
+/** Convenience for call sites that only want the day count. Null for unresolved OR nominal —
+ *  if you need to tell those apart, use resolveParameter and read `resolved`. */
 export function resolveDays(profile: EngineProfileView, key: ConceptKey): number | null {
   return resolveParameter(profile, key).durationDays;
 }
 
+/** Concepts no layer describes. The Workflows page and the bot both surface these. */
+export function unresolvedConcepts(profile: EngineProfileView): ConceptKey[] {
+  const absent = new Set<ConceptKey>();
+  return CONCEPT_KEYS.filter((k) => !absent.has(k) && !resolveParameter(profile, k).resolved);
+}
+
 /**
- * checkDivergence — has a human edited a live parameter away from what extraction READ from
- * the clause? Returns the fields that differ.
+ * checkDivergence — has a human edited a live parameter away from what extraction read?
  *
- * This is INFORMATION to surface on the Workflows / clause page ("your value differs from
- * the clause it came from — intentional?"), never auto-reconciled. Editing a parameter must
- * never write back to clause text: the prose is the record of what was agreed, the parameter
- * is the engine's reading of it. Equally, editing a parameter must never rewrite
- * `extractedParameters` — that snapshot is the fixed baseline this compares against.
+ * Compares the RESOLVED value against the extraction snapshot, so a value inherited from the
+ * General Conditions still registers as divergent if extraction read something different from
+ * the clause. Surfaced as information on the Workflows page, never auto-reconciled: the prose
+ * is the record of what was agreed, the parameter is this system's reading of it.
  */
 export function checkDivergence(
-  profile: Pick<StoredContractProfile, 'parameters' | 'clauseMap'>,
+  profile: Pick<StoredContractProfile, 'parameters' | 'clauseMap' | 'meta'>,
   key: ConceptKey,
 ): (keyof ConceptParameters)[] {
   const extracted = profile.clauseMap[key]?.extractedParameters;
   if (!extracted) return [];
 
-  // Compare against the RESOLVED live value, not the raw override: a concept that inherits
-  // the FIDIC default still diverges if extraction read something different from the clause.
   const live = resolveParameter(profile, key);
-
   const diverged: (keyof ConceptParameters)[] = [];
-  const primitiveFields = ['owner', 'anchor', 'durationDays', 'consequence'] as const;
-  for (const f of primitiveFields) {
+
+  for (const f of CORE_FIELDS) {
     const e = extracted[f];
     if (e !== undefined && e !== live[f]) diverged.push(f);
   }
 
-  // Objects get a shallow structural compare rather than reference identity.
+  // Objects get a structural compare rather than reference identity.
   if (
     extracted.financingRate &&
     JSON.stringify(extracted.financingRate) !== JSON.stringify(live.financingRate)
@@ -105,21 +183,18 @@ export function checkDivergence(
   return diverged;
 }
 
-/**
- * resolveProfile — materialise the full nested view for the Workflows tab and the bot.
- * Never persisted and never handed to the engine (the engine takes EngineProfileView).
- */
+/** Materialise the nested view for the Workflows page and the bot. Never persisted, never
+ *  handed to the engine (which takes EngineProfileView). */
 export function resolveProfile(profile: StoredContractProfile): ResolvedContractProfile {
   const absent = new Set(profile.absentConcepts);
-
   const concepts = {} as Record<ConceptKey, ResolvedConcept>;
+
   for (const key of CONCEPT_KEYS) {
-    const clause = profile.clauseMap[key] ?? null;
     concepts[key] = {
       key,
       present: !absent.has(key),
       parameters: resolveParameter(profile, key),
-      clause,
+      clause: profile.clauseMap[key] ?? null,
       diverged: checkDivergence(profile, key),
     };
   }
@@ -132,7 +207,7 @@ export function resolveProfile(profile: StoredContractProfile): ResolvedContract
   };
 }
 
-/** Default UI label for a concept, honouring any per-contract alias. */
+/** Display label for a concept, honouring any per-contract alias. */
 export function conceptLabel(profile: StoredContractProfile, key: ConceptKey): string {
   return profile.clauseMap[key]?.canonicalName ?? CONCEPTS[key].canonicalName;
 }
@@ -144,12 +219,12 @@ export function conceptLabel(profile: StoredContractProfile, key: ConceptKey): s
 function emptyProfile(
   input: ContractProfileSeedInput,
   baseLabel: string,
-  profileType: 'fidic' | 'custom',
+  profileType: ProfileType,
 ): StoredContractProfile {
   const now = input.now ?? new Date().toISOString();
   return {
     meta: { profileType, baseLabel, createdAt: now, updatedAt: now },
-    parameters: {},
+    parameters: { contract: {}, manual: {} },
     clauseMap: {},
     absentConcepts: [],
     unmappedClauses: [],
@@ -158,24 +233,18 @@ function emptyProfile(
 }
 
 /**
- * A fresh FIDIC profile: empty overrides, so every concept resolves to pure GC defaults, and
- * an empty clauseMap.
- *
- * clauseMap is deliberately EMPTY here rather than pre-filled: GC clause TEXT comes from
- * ClaimGuard's licensed FIDIC asset and is injected by the seeding routine that has access
- * to it (see the note in fidic-defaults.ts). Until then, conceptLabel() falls back to
- * CONCEPTS[key].canonicalName, so the UI still has names. The Particular-Conditions diff
- * flow later writes entries into `parameters`.
+ * A FIDIC profile: both stored layers empty, so every concept resolves to the General
+ * Conditions. Extraction later writes the `contract` layer with whatever the Particular
+ * Conditions and Appendix amend, and clause text from the same upload.
  */
 export function createFidicProfile(input: ContractProfileSeedInput = {}): StoredContractProfile {
   return emptyProfile(input, input.baseLabel ?? 'FIDIC Red Book 1999', 'fidic');
 }
 
 /**
- * A fresh custom profile: the same shape, seeded empty. Extraction fills `parameters` (as
- * overrides against the FIDIC fallback), `clauseMap` (verbatim text + provenance +
- * extractedParameters), `absentConcepts`, and `unmappedClauses`. Every clause entry stays
- * `confirmed: false` until the user proofreads it.
+ * A bespoke profile: identical shape, but with NO general layer behind it. Until extraction
+ * writes the `contract` layer, every concept is unresolved and no deadline is computed — which
+ * is the correct state for a contract nobody has read yet.
  */
 export function createCustomProfile(input: ContractProfileSeedInput = {}): StoredContractProfile {
   return emptyProfile(input, input.baseLabel ?? 'Custom contract', 'custom');
@@ -184,4 +253,21 @@ export function createCustomProfile(input: ContractProfileSeedInput = {}): Store
 /** Stamp meta.updatedAt. Call from every write path. */
 export function touchProfile(profile: StoredContractProfile, now?: string): StoredContractProfile {
   return { ...profile, meta: { ...profile.meta, updatedAt: now ?? new Date().toISOString() } };
+}
+
+/** Merge a sparse override into one layer. Used by extraction (`contract`) and the Workflows
+ *  page (`manual`); never used to write across layers. */
+export function withLayerOverride(
+  profile: StoredContractProfile,
+  layer: 'contract' | 'manual',
+  key: ConceptKey,
+  patch: ConceptParametersOverride,
+): StoredContractProfile {
+  return {
+    ...profile,
+    parameters: {
+      ...profile.parameters,
+      [layer]: { ...profile.parameters[layer], [key]: { ...profile.parameters[layer][key], ...patch } },
+    },
+  };
 }

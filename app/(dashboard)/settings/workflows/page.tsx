@@ -42,7 +42,7 @@ export default async function WorkflowsSettingsPage() {
       <Header baseLabel={profile.meta.baseLabel} needsAttention={needsAttention} />
 
       {groups.map((group) => (
-        <WorkflowChain key={group.id} group={group} />
+        <WorkflowChain key={group.id} group={group} baseLabel={profile.meta.baseLabel} />
       ))}
 
       <ProfileNotes initial={profile.notes} />

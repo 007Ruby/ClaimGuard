@@ -2,24 +2,38 @@
 
 // components/contract/workflow-chain.tsx
 //
-// The visual surface for one workflow group, and the editor for the parameters behind it.
+// One workflow group: the steps in order, and the editor behind each one.
 //
-// One design decision worth naming: the period is drawn as the CONNECTOR between two nodes,
-// not as text inside a node. That is what a contractual period actually is — the waiting time
-// between two events, owned by whoever must act in it. Putting "28 days" inside a box would
-// make it read as an attribute of the notice; putting it on the arrow makes it read as the
-// clock the contractor is running against, which is the thing the contractor is worried about.
+// ─────────────────────────────────────────────────────────────────────────────
+// WHY THIS IS A VERTICAL LIST AND NOT A ROW OF BOXES.
+//
+// The first version drew each step as an equal-width box in a horizontal row with the period on
+// the connector. It read badly for a reason worth keeping in mind: the steps are NOT peers. A
+// 28-day time bar that extinguishes an entitlement and a nominal determination window with no
+// hard clock were getting identical boxes, which flattened the single most important thing on
+// the page. Five boxes across also left no room for the clause reference, the owner, and the
+// state, so all three got shrunk to unreadable chips.
+//
+// Vertically, each step gets a full row: the period can be typographically dominant, a time bar
+// can be marked without competing for space, and the same layout works on a phone. The rail on
+// the left carries the sequence.
+// ─────────────────────────────────────────────────────────────────────────────
 
 import { useState, useTransition } from "react";
 import type { WorkflowGroup, WorkflowNode } from "@/lib/contract/workflows";
+import { layerLabel } from "@/lib/contract/workflows";
 import { CONCEPTS } from "@/lib/contract/concepts";
 import { OWNERS, CONSEQUENCE_TYPES } from "@/lib/contract/types";
 import type { Anchor, ConceptParametersOverride, ConsequenceType, Owner } from "@/lib/contract/types";
-import { updateConceptParameters, setConceptPresence, confirmConcept } from "@/app/actions/contract-profile";
+import {
+  updateConceptParameters,
+  setConceptPresence,
+  confirmConcept,
+  revertConceptToContract,
+} from "@/app/actions/contract-profile";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -31,20 +45,20 @@ import {
 
 const ANCHOR_LABELS: Record<Anchor, string> = {
   contractor_awareness: "Becoming aware of the event",
-  statement_received: "Engineer receiving the Statement",
+  statement_received: "The Engineer receiving the Statement",
   payment_due_date: "The payment due date",
-  claim_received: "Engineer receiving the claim",
-  consultation_complete: "End of consultation",
+  claim_received: "The Engineer receiving the claim",
+  consultation_complete: "The end of consultation",
   suspension_notice_served: "Serving the notice",
   instruction_required: "When the instruction was needed",
 };
 
 const CONSEQUENCE_LABELS: Record<ConsequenceType, string> = {
-  condition_precedent: "Entitlement is lost if the period is missed",
-  soft_support: "Lateness weakens the claim but does not bar it",
-  counterparty_default: "The other party is in default — chase it",
+  condition_precedent: "The entitlement is lost",
+  soft_support: "The claim is weakened but not lost",
+  counterparty_default: "The other party is in default",
   accrues_charges: "Charges start accruing",
-  enables_right: "A right unlocks once the period runs",
+  enables_right: "A right unlocks",
 };
 
 const OWNER_LABELS: Record<Owner, string> = {
@@ -57,7 +71,7 @@ const selectClass =
   "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm " +
   "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50";
 
-export function WorkflowChain({ group }: { group: WorkflowGroup }) {
+export function WorkflowChain({ group, baseLabel }: { group: WorkflowGroup; baseLabel: string }) {
   const [editing, setEditing] = useState<WorkflowNode | null>(null);
 
   return (
@@ -67,93 +81,129 @@ export function WorkflowChain({ group }: { group: WorkflowGroup }) {
         <p className="max-w-prose text-sm text-muted-foreground">{group.description}</p>
       </div>
 
-      <div className="flex flex-col gap-0 lg:flex-row lg:items-stretch">
-        {group.nodes.map((node, i) => (
-          <div key={node.key} className="flex flex-col lg:flex-row lg:items-stretch">
-            <NodeCard node={node} onEdit={() => setEditing(node)} />
-            {i < group.nodes.length - 1 && <Connector node={group.nodes[i + 1]!} />}
-          </div>
+      <ol className="relative">
+        {/* The rail. Inset to sit under the markers, and stopped short of the last row so the
+            sequence reads as ending rather than continuing off the page. */}
+        <div className="absolute bottom-8 left-[7px] top-4 w-px bg-border" aria-hidden />
+
+        {group.nodes.map((node) => (
+          <li key={node.key} className="relative pl-8">
+            <Marker node={node} />
+            <StepRow node={node} baseLabel={baseLabel} onEdit={() => setEditing(node)} />
+          </li>
         ))}
-      </div>
+      </ol>
 
       {editing && (
-        <EditDialog
-          node={editing}
-          onClose={() => setEditing(null)}
-        />
+        <EditDialog node={editing} baseLabel={baseLabel} onClose={() => setEditing(null)} />
       )}
     </section>
   );
 }
 
-function NodeCard({ node, onEdit }: { node: WorkflowNode; onEdit: () => void }) {
+/** Filled for a live step, hollow for one that is absent or not yet found. */
+function Marker({ node }: { node: WorkflowNode }) {
+  const live = node.present && node.parameters.resolved;
+  return (
+    <span
+      aria-hidden
+      className={`absolute left-0 top-[18px] h-[15px] w-[15px] rounded-full border-2 ${
+        live ? "border-foreground bg-foreground" : "border-muted-foreground/40 bg-background"
+      }`}
+    />
+  );
+}
+
+function StepRow({
+  node,
+  baseLabel,
+  onEdit,
+}: {
+  node: WorkflowNode;
+  baseLabel: string;
+  onEdit: () => void;
+}) {
+  const timeBar = node.parameters.consequence === "condition_precedent";
+
   return (
     <button
       type="button"
       onClick={onEdit}
-      className={`w-full rounded-md border p-3 text-left transition-colors hover:bg-accent lg:w-48 ${
-        node.present ? "" : "border-dashed opacity-60"
-      }`}
+      className="group -mx-2 flex w-[calc(100%+1rem)] items-start gap-4 rounded-md px-2 py-3 text-left transition-colors hover:bg-accent"
     >
-      <div className="flex items-start justify-between gap-2">
-        <span className="text-sm font-medium leading-tight">{node.name}</span>
-        {node.sourceClauseRef && (
-          <span className="shrink-0 text-xs text-muted-foreground">{node.sourceClauseRef}</span>
-        )}
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-baseline gap-x-2">
+          <span className={`text-sm font-medium ${node.present ? "" : "line-through opacity-60"}`}>
+            {node.name}
+          </span>
+          {node.sourceClauseRef && (
+            <span className="text-xs text-muted-foreground">{node.sourceClauseRef}</span>
+          )}
+        </div>
+
+        <p className="mt-0.5 text-sm text-muted-foreground">
+          {node.present
+            ? `${OWNER_LABELS[node.parameters.owner]} · ${node.caption}`
+            : "Not in this contract"}
+        </p>
+
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+          {timeBar && node.present && node.parameters.resolved && (
+            <span className="font-medium text-destructive">Missing this loses the claim</span>
+          )}
+          {node.amendsGeneral && node.generalDurationDays !== null && (
+            <span className="text-muted-foreground">
+              {baseLabel} says {node.generalDurationDays} days
+            </span>
+          )}
+          {!node.confirmed && node.present && node.parameters.resolved && (
+            <span className="text-muted-foreground">Needs checking</span>
+          )}
+          {node.diverged.length > 0 && (
+            <span className="text-muted-foreground">Differs from the clause</span>
+          )}
+        </div>
       </div>
 
-      <p className="mt-1 text-xs text-muted-foreground">
-        {node.present ? OWNER_LABELS[node.parameters.owner] : "Not in this contract"}
-      </p>
-
-      <div className="mt-2 flex flex-wrap gap-1">
-        {node.parameters.consequence === "condition_precedent" && (
-          <Badge variant="destructive" className="text-[10px]">Time bar</Badge>
-        )}
-        {!node.confirmed && node.present && (
-          <Badge variant="outline" className="text-[10px]">Needs checking</Badge>
-        )}
-        {node.diverged.length > 0 && (
-          <Badge variant="secondary" className="text-[10px]">Differs from clause</Badge>
+      {/* The period, typographically dominant — it is what the page is for. */}
+      <div className="shrink-0 pt-0.5 text-right">
+        {!node.present ? null : !node.parameters.resolved ? (
+          <span className="text-sm text-muted-foreground">Not set</span>
+        ) : node.parameters.durationDays === null ? (
+          <span className="text-sm text-muted-foreground">No fixed period</span>
+        ) : (
+          <>
+            <span className="text-2xl font-semibold tabular-nums leading-none">
+              {node.parameters.durationDays}
+            </span>
+            <span className="ml-1 text-xs text-muted-foreground">days</span>
+          </>
         )}
       </div>
     </button>
   );
 }
 
-/**
- * The connector carries the NEXT node's period — the wait before that step falls due. Rendered
- * as a vertical rule on narrow screens and a horizontal one from lg up, so the chain reads top
- * to bottom on a phone and left to right on a desktop without a second markup tree.
- */
-function Connector({ node }: { node: WorkflowNode }) {
-  const label =
-    node.parameters.durationDays === null ? "no fixed period" : `${node.parameters.durationDays} days`;
-
-  return (
-    <div className="flex items-center justify-center px-0 py-2 lg:flex-col lg:px-3 lg:py-0">
-      <div className="h-6 w-px bg-border lg:h-px lg:w-6" aria-hidden />
-      <span className="px-2 text-xs tabular-nums text-muted-foreground lg:px-0 lg:py-1">
-        {label}
-      </span>
-      <div className="hidden h-6 w-px bg-border lg:block lg:h-px lg:w-6" aria-hidden />
-    </div>
-  );
-}
-
-function EditDialog({ node, onClose }: { node: WorkflowNode; onClose: () => void }) {
-  const [days, setDays] = useState<string>(
-    node.parameters.durationDays === null ? "" : String(node.parameters.durationDays),
-  );
-  const [owner, setOwner] = useState<Owner>(node.parameters.owner);
-  const [anchor, setAnchor] = useState<Anchor | "">(node.parameters.anchor ?? "");
-  const [consequence, setConsequence] = useState<ConsequenceType | "">(
-    node.parameters.consequence ?? "",
-  );
+function EditDialog({
+  node,
+  baseLabel,
+  onClose,
+}: {
+  node: WorkflowNode;
+  baseLabel: string;
+  onClose: () => void;
+}) {
+  const p = node.parameters;
+  const [days, setDays] = useState(p.durationDays === null ? "" : String(p.durationDays));
+  const [owner, setOwner] = useState<Owner>(p.owner);
+  const [anchor, setAnchor] = useState<Anchor | "">(p.anchor ?? "");
+  const [consequence, setConsequence] = useState<ConsequenceType | "">(p.consequence ?? "");
+  const [showClause, setShowClause] = useState(!p.resolved);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   const validAnchors = CONCEPTS[node.key].validAnchors;
+  const hasManualEdit = Object.values(p.provenance).includes("manual");
 
   function run(fn: () => Promise<{ ok: true } | { ok: false; error: string }>) {
     setError(null);
@@ -176,85 +226,148 @@ function EditDialog({ node, onClose }: { node: WorkflowNode; onClose: () => void
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{node.name}</DialogTitle>
           <DialogDescription>
             {node.sourceClauseRef
               ? `Clause ${node.sourceClauseRef} of your contract.`
-              : "Not yet mapped to a clause in your contract."}{" "}
-            Changing these values changes the deadlines this project runs on.
+              : "Not yet matched to a clause in your contract."}{" "}
+            These values decide the deadlines this project runs on.
           </DialogDescription>
         </DialogHeader>
 
-        {node.diverged.length > 0 && (
+        {!p.resolved && (
           <p className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
-            These values differ from what was read out of the clause
-            {node.diverged.length === 1 ? "" : "s"}: {node.diverged.join(", ")}. That may be
-            deliberate — the clause text is left exactly as it was either way.
+            Nothing in your contract was matched to this step, so no deadline is being tracked
+            for it. Fill it in below, or mark it as not in your contract.
           </p>
         )}
 
+        {node.diverged.length > 0 && (
+          <p className="rounded-md border p-3 text-sm">
+            These differ from what was read out of the clause: {node.diverged.join(", ")}. That
+            may be deliberate — the clause wording is left exactly as it is either way.
+          </p>
+        )}
+
+        {/* The clause, in the same view as the values derived from it. This is the whole
+            proofreading surface: reading the wording next to the number beats a separate
+            clause browser nobody opens. */}
+        {node.clause?.text && (
+          <div className="rounded-md border">
+            <button
+              type="button"
+              onClick={() => setShowClause((v) => !v)}
+              className="flex w-full items-center justify-between px-3 py-2 text-sm font-medium"
+            >
+              <span>
+                What your contract says
+                {node.clause.page ? ` (page ${node.clause.page})` : ""}
+              </span>
+              <span className="text-xs text-muted-foreground">{showClause ? "Hide" : "Show"}</span>
+            </button>
+
+            {showClause && (
+              <div className="space-y-3 border-t px-3 py-3">
+                <div>
+                  {node.clause.contractLabel && (
+                    <p className="text-xs font-medium">{node.clause.contractLabel}</p>
+                  )}
+                  <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">
+                    {node.clause.text}
+                  </p>
+                </div>
+
+                {/* Both layers, when a particular amended the general condition — which is how
+                    a contract administrator actually reads: standard clause, then the
+                    amendment on top. */}
+                {node.clause.general && (
+                  <div className="border-t pt-3">
+                    <p className="text-xs font-medium">
+                      {baseLabel}
+                      {node.clause.general.sourceClauseRef
+                        ? ` ${node.clause.general.sourceClauseRef}`
+                        : ""}{" "}
+                      — replaced by the above
+                    </p>
+                    <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">
+                      {node.clause.general.text}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="days">Period in days</Label>
+          <Field
+            label="Period in days"
+            hint="Leave blank if the contract gives a reasonable time rather than a counted deadline."
+            provenance={layerLabel(p.provenance.durationDays, baseLabel)}
+            comparison={
+              node.amendsGeneral && node.generalDurationDays !== null
+                ? `${baseLabel}: ${node.generalDurationDays} days`
+                : null
+            }
+          >
             <Input
-              id="days"
               inputMode="numeric"
               value={days}
               onChange={(e) => setDays(e.target.value)}
-              placeholder="Leave blank for no fixed period"
+              placeholder="No fixed period"
             />
-            <p className="text-xs text-muted-foreground">
-              Blank means a reasonable time rather than a counted deadline.
-            </p>
-          </div>
+          </Field>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="anchor">Counted from</Label>
+          <Field label="Counted from" provenance={layerLabel(p.provenance.anchor, baseLabel)}>
             <select
-              id="anchor"
               className={selectClass}
               value={anchor}
               onChange={(e) => setAnchor(e.target.value as Anchor | "")}
             >
               <option value="">No starting event</option>
               {validAnchors.map((a) => (
-                <option key={a} value={a}>{ANCHOR_LABELS[a]}</option>
+                <option key={a} value={a}>
+                  {ANCHOR_LABELS[a]}
+                </option>
               ))}
             </select>
-          </div>
+          </Field>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="owner">Who must act</Label>
+          <Field label="Who must act" provenance={layerLabel(p.provenance.owner, baseLabel)}>
             <select
-              id="owner"
               className={selectClass}
               value={owner}
               onChange={(e) => setOwner(e.target.value as Owner)}
             >
               {OWNERS.map((o) => (
-                <option key={o} value={o}>{OWNER_LABELS[o]}</option>
+                <option key={o} value={o}>
+                  {OWNER_LABELS[o]}
+                </option>
               ))}
             </select>
-          </div>
+          </Field>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="consequence">If the period runs out</Label>
+          <Field
+            label="If the period runs out"
+            provenance={layerLabel(p.provenance.consequence, baseLabel)}
+          >
             <select
-              id="consequence"
               className={selectClass}
               value={consequence}
               onChange={(e) => setConsequence(e.target.value as ConsequenceType | "")}
             >
               <option value="">Nothing — this is a trigger, not a deadline</option>
               {CONSEQUENCE_TYPES.map((c) => (
-                <option key={c} value={c}>{CONSEQUENCE_LABELS[c]}</option>
+                <option key={c} value={c}>
+                  {CONSEQUENCE_LABELS[c]}
+                </option>
               ))}
             </select>
-          </div>
+          </Field>
 
-          <label className="flex items-center gap-2 text-sm">
+          <label className="flex items-center gap-2 border-t pt-4 text-sm">
             <input
               type="checkbox"
               checked={!node.present}
@@ -268,23 +381,65 @@ function EditDialog({ node, onClose }: { node: WorkflowNode; onClose: () => void
         {error && <p className="text-sm text-destructive">{error}</p>}
 
         <DialogFooter className="gap-2 sm:justify-between">
-          {!node.confirmed && node.sourceClauseRef && (
-            <Button
-              variant="outline"
-              disabled={pending}
-              onClick={() => run(() => confirmConcept(node.key))}
-            >
-              These are right
-            </Button>
-          )}
           <div className="flex gap-2">
-            <Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button>
+            {hasManualEdit && (
+              <Button
+                variant="ghost"
+                disabled={pending}
+                onClick={() => run(() => revertConceptToContract(node.key))}
+              >
+                Undo my changes
+              </Button>
+            )}
+            {!node.confirmed && node.clause && (
+              <Button
+                variant="outline"
+                disabled={pending}
+                onClick={() => run(() => confirmConcept(node.key))}
+              >
+                This is right
+              </Button>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={onClose} disabled={pending}>
+              Cancel
+            </Button>
             <Button onClick={save} disabled={pending}>
-              {pending ? "Saving" : "Save changes"}
+              {pending ? "Saving" : "Save"}
             </Button>
           </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** A labelled field that also says where its current value came from. Provenance sits next to
+ *  the input because "is this the standard period or did my contract change it?" is the
+ *  question this page exists to answer. */
+function Field({
+  label,
+  hint,
+  provenance,
+  comparison,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  provenance: string;
+  comparison?: string | null;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-baseline justify-between gap-2">
+        <Label>{label}</Label>
+        <span className="text-xs text-muted-foreground">{provenance}</span>
+      </div>
+      {children}
+      {comparison && <p className="text-xs text-muted-foreground">{comparison}</p>}
+      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+    </div>
   );
 }

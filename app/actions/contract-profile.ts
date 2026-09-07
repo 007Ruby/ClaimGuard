@@ -19,7 +19,7 @@ import { revalidatePath } from "next/cache";
 import { getSessionContext } from "@/lib/queries/session";
 import { createClient } from "@/lib/supabase/server";
 import { asProjectContractData } from "@/lib/contract/contract-data";
-import { createFidicProfile, touchProfile } from "@/lib/contract/resolve";
+import { createCustomProfile, createFidicProfile, touchProfile, withLayerOverride } from "@/lib/contract/resolve";
 import { CONCEPTS } from "@/lib/contract/concepts";
 import { ANCHORS, CONSEQUENCE_TYPES, OWNERS } from "@/lib/contract/types";
 import type {
@@ -157,15 +157,29 @@ export async function updateConceptParameters(
   const validated = validatePatch(conceptKey, patch);
   if (typeof validated === "string") return { ok: false, error: validated };
 
-  const next: StoredContractProfile = {
-    ...loaded.profile,
-    parameters: {
-      ...loaded.profile.parameters,
-      [conceptKey]: { ...loaded.profile.parameters[conceptKey], ...validated },
-    },
-  };
+  // Writes go to the MANUAL layer, never to `contract`. The contract layer is the record of
+  // what the document says; overwriting it with a user edit would destroy the very comparison
+  // the Workflows page exists to show, and there would be no way back to the document's value.
+  const next = withLayerOverride(loaded.profile, "manual", conceptKey, validated);
 
   return saveProfile(loaded.projectId, next);
+}
+
+/**
+ * Discard a manual edit and fall back to what the contract (or the General Conditions) says.
+ * Possible only because the layers are stored separately.
+ */
+export async function revertConceptToContract(conceptKey: ConceptKey): Promise<ActionResult> {
+  const loaded = await loadProfile();
+  if (!loaded.ok) return loaded;
+
+  const manual = { ...loaded.profile.parameters.manual };
+  delete manual[conceptKey];
+
+  return saveProfile(loaded.projectId, {
+    ...loaded.profile,
+    parameters: { ...loaded.profile.parameters, manual },
+  });
 }
 
 /** Mark a concept as present in / absent from this contract. */
@@ -211,4 +225,58 @@ export async function updateProfileNotes(notes: string): Promise<ActionResult> {
     ...loaded.profile,
     notes: notes.trim() === "" ? null : notes,
   });
+}
+
+/**
+ * Create the profile for a project, from the fork the user makes before uploading.
+ *
+ * The choice cannot be inferred from the document: a UAE developer's conformed Conditions of
+ * Contract is FIDIC with amendments printed inline, and reads exactly like a bespoke form to
+ * any classifier. Getting it wrong in the safe direction (calling a FIDIC contract bespoke)
+ * costs the user some data entry. Getting it wrong the other way silently seeds ten FIDIC
+ * periods into a contract that never adopted them.
+ */
+export async function initialiseContractProfile(
+  profileType: "fidic" | "custom",
+  baseLabel?: string,
+): Promise<ActionResult> {
+  const { projectId } = await getSessionContext();
+  const supabase = await createClient();
+
+  const { data: row, error: readError } = await supabase
+    .from(CONTRACT_TABLE)
+    .select("data")
+    .eq("project_id", projectId)
+    .maybeSingle();
+
+  if (readError) {
+    console.error("[contract-profile] init read failed:", readError);
+    return { ok: false, error: "Could not read the contract record." };
+  }
+
+  const existing = asProjectContractData(row?.data) ?? {};
+  if (existing.contractProfile) {
+    // Re-initialising would silently discard every confirmed value and manual edit on the
+    // project. Deleting the contract is a separate, deliberate act.
+    return { ok: false, error: "This project already has a contract set up." };
+  }
+
+  const profile =
+    profileType === "fidic"
+      ? createFidicProfile(baseLabel ? { baseLabel } : {})
+      : createCustomProfile(baseLabel ? { baseLabel } : {});
+
+  const { error } = await supabase
+    .from(CONTRACT_TABLE)
+    .update({ data: { ...existing, contractProfile: profile } })
+    .eq("project_id", projectId);
+
+  if (error) {
+    console.error("[contract-profile] init failed:", error);
+    return { ok: false, error: "Could not set up the contract." };
+  }
+
+  revalidatePath("/settings/contract");
+  revalidatePath("/settings/workflows");
+  return { ok: true };
 }

@@ -1,71 +1,68 @@
 // lib/contract/workflows.ts
 //
-// The view model for the Workflows page. This is a VIEW OVER ContractProfile, not a second
-// system — it adds no state, stores nothing, and every value it shows comes back through
-// resolveParameter(). If the page and the engine ever disagree, that is a bug in this file,
-// not a difference of opinion between two sources of truth.
+// The view model for the Workflows page. A VIEW OVER ContractProfile, not a second system — it
+// stores nothing and every value comes back through resolveParameter(). If the page and the
+// engine disagree, that is a bug here, not two sources of truth.
 //
 // What it adds is ORDER and GROUPING: the profile is a flat map of ten concepts, but a
-// contractor thinks in chains — statement leads to certificate leads to payment leads to
-// financing charges leads to suspension. The chain structure lives here because it is a
-// presentation fact, not a contractual parameter.
+// contractor thinks in chains. Chain structure is a presentation fact, so it lives here.
 
 import type {
+  ClauseTextEntry,
   ConceptKey,
   ConceptParameters,
+  ParameterLayer,
+  ResolvedParameters,
   StoredContractProfile,
 } from './types';
 import { CONCEPTS } from './concepts';
-import { checkDivergence, resolveParameter } from './resolve';
+import { checkDivergence, generalLayer, resolveParameter } from './resolve';
 
 export interface WorkflowNode {
   key: ConceptKey;
   name: string;
-  /** The contract's own clause number, when mapped. */
   sourceClauseRef: string | null;
   present: boolean;
-  parameters: ConceptParameters;
-  /** True when a human has vouched for these values. Mirrors isParameterConfirmed. */
+  parameters: ResolvedParameters;
+  /** The General Conditions value this contract departs from, when it departs from one. Null
+   *  for a bespoke contract, or where the GC value still governs. Drives the
+   *  "GC: 28 days → your contract: 21 days" line in the editor. */
+  generalDurationDays: number | null;
+  /** True when the contract or a manual edit changed the period away from the GC value. */
+  amendsGeneral: boolean;
   confirmed: boolean;
-  /** Live fields differing from what extraction read. Surfaced, never auto-reconciled. */
   diverged: (keyof ConceptParameters)[];
-  /** Prose for the node's caption, e.g. "28 days from contractor awareness". */
+  clause: ClauseTextEntry | null;
   caption: string;
 }
 
 export interface WorkflowGroup {
-  id: 'claims' | 'payment' | 'instructions';
+  id: 'claims' | 'payment';
   title: string;
   description: string;
-  /** In chain order. The diagram renders these left to right. */
+  /** In chain order. */
   nodes: WorkflowNode[];
 }
 
-/** Chain order per group. The only place concept ordering is asserted. */
+// Two groups, not three. `delayed_instruction` used to sit alone in an "Instructions" group,
+// which rendered as a one-node chain — a chain with nothing to chain. It belongs with claims:
+// a missing instruction is the ground a delay claim stands on, not a workflow of its own.
 const GROUP_DEFS: { id: WorkflowGroup['id']; title: string; description: string; keys: ConceptKey[] }[] = [
   {
     id: 'claims',
     title: 'Claims',
     description:
       'From becoming aware of an event through to the Engineer\'s determination. The notice ' +
-      'period is the only step here that can extinguish an entitlement outright.',
-    keys: ['claim_notice', 'claim_particulars', 'claim_response', 'determination'],
+      'period is the only step that can extinguish an entitlement outright.',
+    keys: ['delayed_instruction', 'claim_notice', 'claim_particulars', 'claim_response', 'determination'],
   },
   {
     id: 'payment',
-    title: 'Payment chain',
+    title: 'Payment',
     description:
-      'The monthly cycle. Every clock in this chain runs from the Engineer\'s receipt of the ' +
-      'Statement — not from the date the certificate is issued.',
+      'The monthly cycle. Every clock runs from the Engineer\'s receipt of the Statement — ' +
+      'not from the date the certificate is issued.',
     keys: ['payment_statement', 'ipc_issue', 'payment_due', 'financing_charges', 'suspension_notice'],
-  },
-  {
-    id: 'instructions',
-    title: 'Instructions & information',
-    description:
-      'Where a drawing or instruction the works depend on has not arrived. Drives RFIs and, ' +
-      'where the delay bites, a claim.',
-    keys: ['delayed_instruction'],
   },
 ];
 
@@ -79,18 +76,37 @@ const ANCHOR_PROSE: Record<string, string> = {
   instruction_required: 'from when the instruction was needed',
 };
 
-function captionFor(p: ConceptParameters): string {
+function captionFor(p: ResolvedParameters): string {
+  if (!p.resolved) return 'Not found in your contract';
   if (p.durationDays === null) {
     return p.anchor ? `No fixed period — ${ANCHOR_PROSE[p.anchor] ?? p.anchor}` : 'Trigger event';
   }
-  const anchor = p.anchor ? ANCHOR_PROSE[p.anchor] ?? p.anchor : '';
-  return `${p.durationDays} days ${anchor}`.trim();
+  return `${p.durationDays} days ${p.anchor ? ANCHOR_PROSE[p.anchor] ?? p.anchor : ''}`.trim();
 }
 
-/** A parameter is vouched for: FIDIC GC defaults are, extractions are only once proofread. */
+/** Human label for a provenance layer, for the "where did this come from" line. */
+export function layerLabel(layer: ParameterLayer, baseLabel: string): string {
+  switch (layer) {
+    case 'manual':
+      return 'You set this';
+    case 'contract':
+      return 'From your contract';
+    case 'general':
+      return baseLabel;
+    case 'unresolved':
+      return 'Not found';
+  }
+}
+
+/** A parameter is vouched for: GC values are by construction, extractions only once proofread. */
 export function isConfirmed(profile: StoredContractProfile, key: ConceptKey): boolean {
-  const hasOverride = profile.parameters[key] !== undefined;
-  if (profile.meta.profileType === 'fidic' && !hasOverride) return true;
+  // A manual edit is the user's own value — nothing to proofread.
+  if (profile.parameters.manual[key] !== undefined) return true;
+  // Nothing extracted for this concept: on a FIDIC profile the GC value stands unamended and
+  // needs no confirmation; on a bespoke one it is unresolved, which is not the same as confirmed.
+  if (profile.parameters.contract[key] === undefined) {
+    return profile.meta.profileType === 'fidic';
+  }
   return profile.clauseMap[key]?.confirmed === true;
 }
 
@@ -101,27 +117,37 @@ export function buildWorkflowGroups(profile: StoredContractProfile): WorkflowGro
     id: def.id,
     title: def.title,
     description: def.description,
-    nodes: def.keys.map((key) => {
+    nodes: def.keys.map((key): WorkflowNode => {
       const parameters = resolveParameter(profile, key);
-      const entry = profile.clauseMap[key];
+      const entry = profile.clauseMap[key] ?? null;
+      const general = generalLayer(profile.meta.profileType, key);
+      const generalDays = general?.durationDays ?? null;
+
       return {
         key,
         name: entry?.canonicalName ?? CONCEPTS[key].canonicalName,
         sourceClauseRef: entry?.sourceClauseRef ?? null,
         present: !absent.has(key),
         parameters,
+        generalDurationDays: generalDays,
+        amendsGeneral:
+          general !== null &&
+          parameters.provenance.durationDays !== 'general' &&
+          parameters.durationDays !== generalDays,
         confirmed: isConfirmed(profile, key),
         diverged: checkDivergence(profile, key),
+        clause: entry,
         caption: captionFor(parameters),
       };
     }),
   }));
 }
 
-/** Count of things needing the user's attention, for the settings-nav badge. */
+/** Count of things needing the user's attention, for the settings-nav badge. Unresolved
+ *  concepts count: on a bespoke contract they are the whole onboarding task. */
 export function countNeedsAttention(profile: StoredContractProfile): number {
-  const groups = buildWorkflowGroups(profile);
-  return groups
+  return buildWorkflowGroups(profile)
     .flatMap((g) => g.nodes)
-    .filter((n) => n.present && (!n.confirmed || n.diverged.length > 0)).length;
+    .filter((n) => n.present && (!n.parameters.resolved || !n.confirmed || n.diverged.length > 0))
+    .length;
 }

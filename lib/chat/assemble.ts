@@ -32,7 +32,7 @@ import { resolveParameter } from '@/lib/contract/resolve';
 import { CONCEPTS } from '@/lib/contract/concepts';
 import type { ProjectContractData } from '@/lib/contract/contract-data';
 import { matchConcepts, type ConceptMatch } from './concept-match';
-import { retrieveChunks, type RetrievalResult } from './retrieval';
+import { retrieveChunks, type RetrievalDeps, type RetrievalResult } from './retrieval';
 
 /**
  * The exact marker the system prompt keys off. Declared as a constant and interpolated rather
@@ -127,8 +127,13 @@ export function isParameterConfirmed(
   profile: Pick<StoredContractProfile, 'meta' | 'parameters' | 'clauseMap'>,
   key: ConceptKey,
 ): boolean {
-  const hasOverride = profile.parameters[key] !== undefined;
-  if (profile.meta.profileType === 'fidic' && !hasOverride) return true;
+  // The user's own edit needs no proofreading.
+  if (profile.parameters.manual[key] !== undefined) return true;
+  // Nothing extracted: on a FIDIC profile the General Conditions stand unamended and are
+  // confirmed by construction; on a bespoke profile there is nothing behind them at all.
+  if (profile.parameters.contract[key] === undefined) {
+    return profile.meta.profileType === 'fidic';
+  }
   return profile.clauseMap[key]?.confirmed === true;
 }
 
@@ -179,6 +184,17 @@ function buildParametersBlock(profile: StoredContractProfile): string {
 
     const p = resolveParameter(profile, key);
     const ref = profile.clauseMap[key]?.sourceClauseRef;
+
+    // Unresolved is NOT a value. Nothing in any layer describes this concept, so there is no
+    // period, no deadline, and nothing to reason from. Saying so plainly is the only safe
+    // output — the alternative is the model supplying a standard-form period from memory.
+    if (!p.resolved) {
+      lines.push(
+        `- ${name}: NOT FOUND in this contract. No period is tracked. Do not state one, ` +
+          'and do not fall back on the standard form. Tell the user it has not been set up.',
+      );
+      continue;
+    }
 
     lines.push(
       [
@@ -365,6 +381,9 @@ export interface AssembleInput {
   identity: ProjectIdentity;
   profile: StoredContractProfile;
   digest: LiveDigestItem[];
+  /** Supabase + OpenAI clients for Tier 3. Pass null to run on Tiers 1 and 2 alone — which is
+   *  a complete, correct assistant, just one without contract-wide search. */
+  retrievalDeps: RetrievalDeps | null;
 }
 
 /**
@@ -375,7 +394,7 @@ export interface AssembleInput {
  * leaves the bot able to state every deadline correctly.
  */
 export async function assembleContext(input: AssembleInput): Promise<AssembledContext> {
-  const { question, projectId, identity, profile, digest } = input;
+  const { question, projectId, identity, profile, digest, retrievalDeps } = input;
 
   const blocks: string[] = [
     buildIdentityBlock(identity),
@@ -395,7 +414,7 @@ export async function assembleContext(input: AssembleInput): Promise<AssembledCo
 
   let retrieval: RetrievalResult;
   try {
-    retrieval = await retrieveChunks(question, projectId);
+    retrieval = await retrieveChunks(question, projectId, retrievalDeps);
   } catch (err) {
     console.error('[chat/assemble] Tier 3 retrieval failed:', err);
     retrieval = { chunks: [], available: false, reason: 'Retrieval threw.' };
