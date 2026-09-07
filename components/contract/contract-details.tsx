@@ -83,14 +83,19 @@ export function ContractDetails({ initial }: { initial: Data }) {
     });
   }
 
-  if (!editing) {
+    if (!editing) {
+    // Absolutely positioned rather than stacked above, so the button sits in the summary's own
+    // top-right corner whether or not ContractSummary renders its own card.
     return (
-      <div className="space-y-3">
-        <div className="flex justify-end">
-          <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
-            <Pencil className="mr-2 h-4 w-4" /> Edit
-          </Button>
-        </div>
+      <div className="relative">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setEditing(true)}
+          className="absolute right-4 top-4 z-10"
+        >
+          <Pencil className="mr-2 h-4 w-4" /> Edit
+        </Button>
         <ContractSummary data={initial} />
       </div>
     );

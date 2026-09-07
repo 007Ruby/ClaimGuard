@@ -1,26 +1,13 @@
 "use client";
 
-// components/contract/workflow-chain.tsx
+// components/contract/concept-edit-dialog.tsx
 //
-// One workflow group: the steps in order, and the editor behind each one.
-//
-// ─────────────────────────────────────────────────────────────────────────────
-// WHY THIS IS A VERTICAL LIST AND NOT A ROW OF BOXES.
-//
-// The first version drew each step as an equal-width box in a horizontal row with the period on
-// the connector. It read badly for a reason worth keeping in mind: the steps are NOT peers. A
-// 28-day time bar that extinguishes an entitlement and a nominal determination window with no
-// hard clock were getting identical boxes, which flattened the single most important thing on
-// the page. Five boxes across also left no room for the clause reference, the owner, and the
-// state, so all three got shrunk to unreadable chips.
-//
-// Vertically, each step gets a full row: the period can be typographically dominant, a time bar
-// can be marked without competing for space, and the same layout works on a phone. The rail on
-// the left carries the sequence.
-// ─────────────────────────────────────────────────────────────────────────────
+// The editor behind a single step. Lifted out of workflow-chain.tsx unchanged when the
+// Workflows page was folded into /settings/contract — there is exactly one place a parameter
+// can be edited, and this is it.
 
 import { useState, useTransition } from "react";
-import type { WorkflowGroup, WorkflowNode } from "@/lib/contract/workflows";
+import type { WorkflowNode } from "@/lib/contract/workflows";
 import { layerLabel } from "@/lib/contract/workflows";
 import { CONCEPTS } from "@/lib/contract/concepts";
 import { OWNERS, CONSEQUENCE_TYPES } from "@/lib/contract/types";
@@ -71,120 +58,7 @@ const selectClass =
   "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm " +
   "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50";
 
-export function WorkflowChain({ group, baseLabel }: { group: WorkflowGroup; baseLabel: string }) {
-  const [editing, setEditing] = useState<WorkflowNode | null>(null);
-
-  return (
-    <section className="space-y-4">
-      <div>
-        <h2 className="text-lg font-semibold">{group.title}</h2>
-        <p className="max-w-prose text-sm text-muted-foreground">{group.description}</p>
-      </div>
-
-      <ol className="relative">
-        {/* The rail. Inset to sit under the markers, and stopped short of the last row so the
-            sequence reads as ending rather than continuing off the page. */}
-        <div className="absolute bottom-8 left-[7px] top-4 w-px bg-border" aria-hidden />
-
-        {group.nodes.map((node) => (
-          <li key={node.key} className="relative pl-8">
-            <Marker node={node} />
-            <StepRow node={node} baseLabel={baseLabel} onEdit={() => setEditing(node)} />
-          </li>
-        ))}
-      </ol>
-
-      {editing && (
-        <EditDialog node={editing} baseLabel={baseLabel} onClose={() => setEditing(null)} />
-      )}
-    </section>
-  );
-}
-
-/** Filled for a live step, hollow for one that is absent or not yet found. */
-function Marker({ node }: { node: WorkflowNode }) {
-  const live = node.present && node.parameters.resolved;
-  return (
-    <span
-      aria-hidden
-      className={`absolute left-0 top-[18px] h-[15px] w-[15px] rounded-full border-2 ${
-        live ? "border-foreground bg-foreground" : "border-muted-foreground/40 bg-background"
-      }`}
-    />
-  );
-}
-
-function StepRow({
-  node,
-  baseLabel,
-  onEdit,
-}: {
-  node: WorkflowNode;
-  baseLabel: string;
-  onEdit: () => void;
-}) {
-  const timeBar = node.parameters.consequence === "condition_precedent";
-
-  return (
-    <button
-      type="button"
-      onClick={onEdit}
-      className="group -mx-2 flex w-[calc(100%+1rem)] items-start gap-4 rounded-md px-2 py-3 text-left transition-colors hover:bg-accent"
-    >
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-baseline gap-x-2">
-          <span className={`text-sm font-medium ${node.present ? "" : "line-through opacity-60"}`}>
-            {node.name}
-          </span>
-          {node.sourceClauseRef && (
-            <span className="text-xs text-muted-foreground">{node.sourceClauseRef}</span>
-          )}
-        </div>
-
-        <p className="mt-0.5 text-sm text-muted-foreground">
-          {node.present
-            ? `${OWNER_LABELS[node.parameters.owner]} · ${node.caption}`
-            : "Not in this contract"}
-        </p>
-
-        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-          {timeBar && node.present && node.parameters.resolved && (
-            <span className="font-medium text-destructive">Missing this loses the claim</span>
-          )}
-          {node.amendsGeneral && node.generalDurationDays !== null && (
-            <span className="text-muted-foreground">
-              {baseLabel} says {node.generalDurationDays} days
-            </span>
-          )}
-          {!node.confirmed && node.present && node.parameters.resolved && (
-            <span className="text-muted-foreground">Needs checking</span>
-          )}
-          {node.diverged.length > 0 && (
-            <span className="text-muted-foreground">Differs from the clause</span>
-          )}
-        </div>
-      </div>
-
-      {/* The period, typographically dominant — it is what the page is for. */}
-      <div className="shrink-0 pt-0.5 text-right">
-        {!node.present ? null : !node.parameters.resolved ? (
-          <span className="text-sm text-muted-foreground">Not set</span>
-        ) : node.parameters.durationDays === null ? (
-          <span className="text-sm text-muted-foreground">No fixed period</span>
-        ) : (
-          <>
-            <span className="text-2xl font-semibold tabular-nums leading-none">
-              {node.parameters.durationDays}
-            </span>
-            <span className="ml-1 text-xs text-muted-foreground">days</span>
-          </>
-        )}
-      </div>
-    </button>
-  );
-}
-
-function EditDialog({
+export function ConceptEditDialog({
   node,
   baseLabel,
   onClose,
@@ -251,9 +125,6 @@ function EditDialog({
           </p>
         )}
 
-        {/* The clause, in the same view as the values derived from it. This is the whole
-            proofreading surface: reading the wording next to the number beats a separate
-            clause browser nobody opens. */}
         {node.clause?.text && (
           <div className="rounded-md border">
             <button
@@ -279,9 +150,6 @@ function EditDialog({
                   </p>
                 </div>
 
-                {/* Both layers, when a particular amended the general condition — which is how
-                    a contract administrator actually reads: standard clause, then the
-                    amendment on top. */}
                 {node.clause.general && (
                   <div className="border-t pt-3">
                     <p className="text-xs font-medium">
@@ -415,9 +283,6 @@ function EditDialog({
   );
 }
 
-/** A labelled field that also says where its current value came from. Provenance sits next to
- *  the input because "is this the standard period or did my contract change it?" is the
- *  question this page exists to answer. */
 function Field({
   label,
   hint,

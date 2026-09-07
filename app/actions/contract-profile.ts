@@ -14,7 +14,7 @@
 // touches `parameters` and nothing else, and `extractedParameters` (the baseline divergence is
 // measured against) is never rewritten from here.
 // ─────────────────────────────────────────────────────────────────────────────
-
+import { toParameters, type ExtractedConcept } from "@/lib/contract/extract-profile";
 import { revalidatePath } from "next/cache";
 import { getSessionContext } from "@/lib/queries/session";
 import { createClient } from "@/lib/supabase/server";
@@ -140,8 +140,6 @@ async function saveProfile(projectId: string, profile: StoredContractProfile): P
     console.error("[contract-profile] save failed:", error);
     return { ok: false, error: "Could not save." };
   }
-
-  revalidatePath("/settings/workflows");
   revalidatePath("/settings/contract");
   return { ok: true };
 }
@@ -228,55 +226,139 @@ export async function updateProfileNotes(notes: string): Promise<ActionResult> {
 }
 
 /**
- * Create the profile for a project, from the fork the user makes before uploading.
+ * Commit an uploaded contract: the document's descriptive data, and the profile built from its
+ * clauses. One action for first upload and for replacement, because they differ only in whether
+ * something is being destroyed.
  *
- * The choice cannot be inferred from the document: a UAE developer's conformed Conditions of
- * Contract is FIDIC with amendments printed inline, and reads exactly like a bespoke form to
- * any classifier. Getting it wrong in the safe direction (calling a FIDIC contract bespoke)
- * costs the user some data entry. Getting it wrong the other way silently seeds ten FIDIC
- * periods into a contract that never adopted them.
+ * INSERT-or-UPDATE, not UPDATE. A project that has never had a contract has no row in this
+ * table, so a bare `.update()` matched zero rows, returned no error, reported success, and left
+ * the user pressing Continue on a page that never changed.
  */
-export async function initialiseContractProfile(
-  profileType: "fidic" | "custom",
-  baseLabel?: string,
-): Promise<ActionResult> {
-  const { projectId } = await getSessionContext();
+export async function commitContract(input: {
+  profileType: "fidic" | "custom";
+  baseLabel?: string;
+  /** The descriptive extraction — parties, amount, dates. */
+  extracted: Record<string, unknown>;
+  /** The clause extraction. Empty is legitimate: nothing is invented to fill it. */
+  concepts: ExtractedConcept[];
+  replace: boolean;
+}): Promise<ActionResult> {
+  const { orgId, projectId } = await getSessionContext();
   const supabase = await createClient();
 
   const { data: row, error: readError } = await supabase
     .from(CONTRACT_TABLE)
-    .select("data")
+    .select("id, data")
     .eq("project_id", projectId)
     .maybeSingle();
 
   if (readError) {
-    console.error("[contract-profile] init read failed:", readError);
+    console.error("[contract-profile] commit read failed:", readError);
     return { ok: false, error: "Could not read the contract record." };
   }
 
   const existing = asProjectContractData(row?.data) ?? {};
-  if (existing.contractProfile) {
-    // Re-initialising would silently discard every confirmed value and manual edit on the
-    // project. Deleting the contract is a separate, deliberate act.
+
+  if (existing.contractProfile && !input.replace) {
     return { ok: false, error: "This project already has a contract set up." };
   }
 
-  const profile =
-    profileType === "fidic"
-      ? createFidicProfile(baseLabel ? { baseLabel } : {})
-      : createCustomProfile(baseLabel ? { baseLabel } : {});
+  // `dayOverrides` is dropped on the floor. Periods live on the profile now; a second map of
+  // loose numbers on `data` is exactly the kind of parallel source that goes stale and then
+  // quietly disagrees with the engine.
+  const { dayOverrides: _discarded, ...descriptive } = input.extracted as Record<string, unknown> & {
+    dayOverrides?: unknown;
+  };
 
-  const { error } = await supabase
-    .from(CONTRACT_TABLE)
-    .update({ data: { ...existing, contractProfile: profile } })
-    .eq("project_id", projectId);
+  const base =
+    input.profileType === "fidic"
+      ? createFidicProfile(input.baseLabel ? { baseLabel: input.baseLabel } : {})
+      : createCustomProfile(input.baseLabel ? { baseLabel: input.baseLabel } : {});
+
+  const profile = applyExtraction(base, input.concepts);
+
+  const data = { ...descriptive, contractProfile: profile };
+  const framework =
+    (descriptive.framework as string) ||
+    (input.profileType === "fidic" ? "FIDIC Red Book 1999" : "Bespoke contract");
+
+  const record = {
+    name: (descriptive.name as string) || "Project contract",
+    framework,
+    commencement_date: (descriptive.commencementDate as string) || null,
+    data,
+  };
+
+  const { error } = row
+    ? await supabase.from(CONTRACT_TABLE).update(record).eq("id", row.id)
+    : await supabase.from(CONTRACT_TABLE).insert({ org_id: orgId, project_id: projectId, ...record });
 
   if (error) {
-    console.error("[contract-profile] init failed:", error);
-    return { ok: false, error: "Could not set up the contract." };
+    console.error("[contract-profile] commit failed:", error);
+    return { ok: false, error: "Could not save the contract." };
   }
 
+  if (input.replace) {
+    // Retrieval chunks belong to the document that is gone. Left in place, the assistant would
+    // answer questions by quoting a contract that no longer governs this project — confidently,
+    // and with nothing to tell the user it had done so. Non-fatal, but loud.
+    const { error: chunkError } = await supabase
+      .from("contract_chunks")
+      .delete()
+      .eq("project_id", projectId);
+    if (chunkError) console.error("[contract-profile] stale chunk delete failed:", chunkError);
+  }
+
+  revalidatePath("/");
+  revalidatePath("/events");
   revalidatePath("/settings/contract");
-  revalidatePath("/settings/workflows");
   return { ok: true };
+}
+
+/**
+ * Fold an extraction into a fresh profile: parameters into the CONTRACT layer, wording into the
+ * clause map.
+ *
+ * No separate baseline copy is stored. The contract layer IS the record of what the document
+ * said — `manual` sits on top of it and divergence is the difference between the two, computed
+ * when needed. A third stored copy would be a second source of truth with nothing keeping it
+ * honest.
+ *
+ * `confirmed` is false on every entry without exception. Only a human act sets it — that is the
+ * entire point of the flag, and an extraction marking its own output as proofread would empty
+ * the "needs checking" count on exactly the contracts that most need one.
+ *
+ * A concept the extraction did not find is written NOWHERE: not defaulted, not stubbed, not
+ * marked absent. On a FIDIC profile the general layer then governs it and the page says so; on a
+ * bespoke profile it resolves to unresolved and the page asks.
+ */
+function applyExtraction(
+  profile: StoredContractProfile,
+  concepts: ExtractedConcept[],
+): StoredContractProfile {
+  const contract = { ...profile.parameters.contract };
+  const clauseMap = { ...profile.clauseMap };
+
+  for (const c of concepts) {
+    contract[c.key] = toParameters(c);
+    clauseMap[c.key] = {
+      canonicalName: CONCEPTS[c.key].canonicalName,
+      sourceClauseRef: c.sourceClauseRef,
+      contractLabel: c.contractLabel,
+      text: c.text,
+      // Extraction reads a flat text sidecar with no page structure, so there is no page number
+      // to record. The clause reference is what the user searches their own PDF by anyway.
+      page: null,
+      // The General Conditions text this clause replaced. Null by design: ClaimGuard ships FIDIC
+      // defaults, not FIDIC prose, so there is no GC wording to show alongside an amendment.
+      general: null,
+      confirmed: false,
+    };
+  }
+
+  return {
+    ...profile,
+    parameters: { ...profile.parameters, contract },
+    clauseMap,
+  };
 }

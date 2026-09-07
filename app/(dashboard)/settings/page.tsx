@@ -15,12 +15,6 @@ const SECTIONS: { href: string; label: string; description: string; icon: React.
     description: "The specification that defines the works to be executed.",
     icon: <FileText className="h-5 w-5" />,
   },
-  {
-    href: "/settings/workflows",
-    label: "Workflows",
-    description: "Deterministic Workflows",
-    icon: <FileText className="h-5 w-5" />,
-  }
 ];
 
 export default function SettingsPage() {

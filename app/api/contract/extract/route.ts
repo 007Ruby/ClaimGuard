@@ -5,6 +5,7 @@ import OpenAI from "openai";
 import { createClient } from "@/lib/supabase/server";
 import { getSessionContext } from "@/lib/queries/session";
 import { extractPdfText } from "@/lib/pdf/extract";
+import { extractConceptsFromText, type ExtractedConcept } from "@/lib/contract/extract-profile";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -90,7 +91,7 @@ export async function POST(req: Request) {
     let data: Record<string, any> = {};
     try {
       const res = await openai.chat.completions.create({
-        model: "gpt-5.4-mini",
+        model: "gpt-5.6-terra",
         response_format: { type: "json_object" },
         messages: [
           { role: "system", content:
@@ -101,10 +102,23 @@ export async function POST(req: Request) {
       data = JSON.parse(res.choices[0].message.content ?? "{}");
     } catch (e: any) { console.error("ai-extract:", e); }
 
+    stage = "ai-concepts";
+    // The second pass. Deliberately AFTER the descriptive one and separately guarded: if clause
+    // reading fails, the user still gets parties, dates and a saved PDF rather than nothing.
+    let concepts: ExtractedConcept[] = [];
+    let missing: string[] = [];
+    try {
+      const result = await extractConceptsFromText(text);
+      concepts = result.concepts;
+      missing = result.missing;
+    } catch (e: any) {
+      console.error("ai-concepts:", e);
+    }
+
     data.framework = data.framework || "FIDIC Red Book 1999";
     data.file_path = pdfPath;
     if (!txtErr) data.text_path = textPath;
-    return NextResponse.json({ data });
+    return NextResponse.json({ data, concepts, missing });
   } catch (e: any) {
     console.error(`contract/extract failed at stage "${stage}":`, e);
     return NextResponse.json({ error: `Failed at stage "${stage}": ${e?.message ?? String(e)}`, stage }, { status: 500 });
