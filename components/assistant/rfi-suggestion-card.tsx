@@ -4,6 +4,7 @@ import * as React from "react";
 import { CreateRfiButton } from "@/components/rfi/create-rfi-button";
 import type { RfiSeed } from "@/lib/rfi/types";
 
+//
 /**
  * Renders an assistant-proposed RFI inline in the chat. The Create RFI button
  * reuses the shared funnel, so this behaves identically to the inbox flag.

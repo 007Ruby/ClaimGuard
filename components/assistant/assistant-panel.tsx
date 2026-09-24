@@ -6,17 +6,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { RfiSuggestionCard } from "@/components/assistant/rfi-suggestion-card";
 import type { RfiSeed } from "@/lib/rfi/types";
 
-/**
- * Context-scoped assistant. Mount it in the dashboard layout (or per page) and
- * pass the current surface's context; the server route assembles the event +
- * evidence text from these ids. It never has global project knowledge.
- *
- * Example (events page): <AssistantPanel context={{ surface: "event", eventId }} />
- * Example (inbox item):  <AssistantPanel context={{ surface: "inbox", evidenceId }} />
- * Example (claim):       <AssistantPanel context={{ surface: "claim", claimId }} />
- * Example (rfi):         <AssistantPanel context={{ surface: "rfi", rfiId }} />
- */
+// Context-scoped assistant. 
+// Pass the current surface's context; the server route assembles the event + evidence text from these ids. 
+// No global project knowledge
+
 export interface AssistantContext {
+  //this assistant is used in the following surfaces
   surface: "event" | "inbox" | "claim" | "rfi";
   eventId?: string;
   evidenceId?: string;

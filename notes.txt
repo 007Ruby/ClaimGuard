@@ -1,0 +1,18 @@
+a skill with openAI, which is a system prompt that gets sent in depending on the question asked
+    - e.g right now, SYSTEM_PROMPT gets passed in with every question
+    - You could essentially have specialised prompts that get sent in 
+
+worth experimenting just RAG, just T1 an T2, and combination
+    - I am honestly thinking of focusing solely on RAG
+    - maybe the determinsitic values too, but probably just RAG
+
+CommDataIQ to view observability: acc not sure what CommDataIQ does
+Langfuse to explore observability: 
+    - tells you every step that the AI does, and the determinstic values that go into its outputs
+    - You can see things like: 
+        - is it doing things in the correct order? 
+        - is it looking at all the correct sources?
+        - are the deterministic values (e.g time bars, clauses, etc) it relies on for an answer actually relevant
+
+You could even test usability things like are there any biases when talking to different types of people
+    

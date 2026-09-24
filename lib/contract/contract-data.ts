@@ -1,27 +1,10 @@
-// lib/contract/contract-data.ts
-//
+
 // The shape of `project_contracts.data` (JSONB) after adopting ContractProfile.
-//
-// Design decision (source of truth): the ContractProfile is the SINGLE source of truth for the
-// deterministic layer. `dayOverrides` is RETIRED as stored state — it is derived from
-// contractProfile.parameters at read time by profile-adapter.projectDayOverrides(). This keeps
-// one representation of every period (no stored duplicate to drift), consistent with the
-// parameter-is-the-reading principle: we never store the same number twice.
-//
-// The descriptive metadata already on `data` (parties, currency, retention %, arbitration, etc.)
-// is PRESERVED in place and untouched, so existing consumers (bot context, headers) keep working.
-// Only `dayOverrides` moves — into contractProfile.parameters — and the engine gets it back via
-// read-time projection in the query layer (get-obligations contextFor).
+
 
 import type { StoredContractProfile } from './types';
 
-/** Descriptive, non-deterministic contract metadata. Unchanged from today's `data`; kept as-is
- *  so anything reading data.parties / data.currency / etc. is unaffected.
- *
- *  Tradeoff on the index signature below: it keeps this permissive so new descriptive fields
- *  don't need a type change, but it also means a typo (`data.retentionPCT`) resolves to
- *  `unknown` instead of erroring. Accepted for the descriptive layer only — the deterministic
- *  layer under `contractProfile` is closed and exhaustively typed, which is where it matters. */
+
 export interface ContractMeta {
   name?: string;
   parties?: { employer?: string; engineer?: string; contractor?: string };

@@ -1,32 +1,17 @@
-// lib/chat/assemble.ts
-//
-// THE THREE-TIER CONTEXT ASSEMBLER. Pure and synchronous apart from Tier 3 — no session, no
-// Supabase, no I/O of its own. Loading and failure handling stay in context.ts; this file only
-// turns already-loaded material into prompt blocks, which makes it testable against a fixture
-// profile with no database.
+
+//Assembles the 3 layers of the context.
 //
 //   TIER 1 — always resident. Project identity, the resolved parameters, and the live digest of
 //            engine-computed deadlines. Never conditional, never inferred. This is what makes
 //            date answers trustworthy: the bot RELAYS what the engine computed.
 //
-//   TIER 2 — concept-addressed. When the question resolves to a modelled concept (DNS lookup in
+//   TIER 2 (REMOVED FOR NOW) — concept-addressed. When the question resolves to a modelled concept (DNS lookup in
 //            concept-match.ts), the exact clause text and provenance for that concept.
 //
 //   TIER 3 — always-on, relevance-gated retrieval over the rest of the corpus. Fails soft;
 //            currently a null implementation (retrieval.ts).
-//
-// ─────────────────────────────────────────────────────────────────────────────
-// DIVISION OF LABOUR WITH THE SYSTEM PROMPT — worth being explicit about, because getting it
-// wrong produces two sets of rules that quietly disagree.
-//
-//   The system prompt owns:   role, answer shape, formatting, stance, what not to adjudicate.
-//   This file owns:           what is true about this project, and which source wins.
-//
-// Precedence lives HERE, adjacent to the material it ranks, rather than in the prompt. A rule
-// about the material is easier to follow when it sits next to the material, and it stops the
-// prompt from asserting things about blocks that may not have been assembled this turn.
-// ─────────────────────────────────────────────────────────────────────────────
 
+// conceptKey is the union of the canonical concept terms relied on in tier 2
 import type { ConceptKey, Owner, StoredContractProfile } from '@/lib/contract/types';
 import { resolveParameter } from '@/lib/contract/resolve';
 import { CONCEPTS } from '@/lib/contract/concepts';
@@ -34,11 +19,6 @@ import type { ProjectContractData } from '@/lib/contract/contract-data';
 import { matchConcepts, type ConceptMatch } from './concept-match';
 import { retrieveChunks, type RetrievalDeps, type RetrievalResult } from './retrieval';
 
-/**
- * The exact marker the system prompt keys off. Declared as a constant and interpolated rather
- * than typed out in both files, because a prompt instruction that references a string the
- * assembler no longer emits points at nothing and fails silently.
- */
 export const AUTHORITATIVE_MARKER = 'system-computed — AUTHORITATIVE';
 
 // ---------------------------------------------------------------------------
@@ -55,17 +35,17 @@ export const AUTHORITATIVE_MARKER = 'system-computed — AUTHORITATIVE';
 export interface LiveDigestItem {
   eventId: string;
   eventTitle: string;
-  /** The modelled concept this obligation belongs to, where the engine step maps to one. */
+  // The modelled concept this obligation belongs to, where the engine step maps to one (tier 2).
   conceptKey: ConceptKey | null;
-  /** The action, e.g. "Serve Notice of Claim". */
+  //The action, e.g. "Serve Notice of Claim".
   label: string;
   description: string | null;
-  /** ISO date, engine-computed. Null for nominal obligations with no hard clock. */
+  //ISO date, engine-computed. Null for nominal obligations with no hard clock.
   dueDate: string | null;
   daysRemaining: number | null;
   status: 'upcoming' | 'due_soon' | 'overdue' | 'time_barred';
   owner: Owner;
-  /** The contract's own clause reference, for citation. */
+  //The contract's own clause reference, for citation. 
   clauseRef: string | null;
   outstandingAmount: number | null;
 }
@@ -77,21 +57,17 @@ export interface ProjectIdentity {
   contractor: string | null;
   contractValue: string | null;
   commencementDate: string | null;
-  /** ISO. Explicit, because it is the anchor of every relative date the bot states. */
+  //ISO. Explicit, because it is the anchor of every relative date the bot states. 
   today: string;
 }
 
 export interface AssembledContext {
-  /** Ordered blocks to concatenate into the provided material. */
+  //ordered blocks to concatenate into the provided material.
   blocks: string[];
-  /** Which concepts Tier 2 fired on — for the trace / sources affordance. */
+  //Which concepts Tier 2 fired on — for the trace / sources affordance. */
   matchedConcepts: ConceptMatch[];
   retrieval: RetrievalResult;
 }
-
-// ---------------------------------------------------------------------------
-// Identity
-// ---------------------------------------------------------------------------
 
 export function buildIdentity(input: {
   projectName: string;
@@ -115,14 +91,7 @@ export function buildIdentity(input: {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Confirmation.
-//
-// An unamended FIDIC period is confirmed by construction — nobody extracted it, it is
-// ClaimGuard's own licensed reference data. An extracted value is confirmed only once a human
-// has proofread the clause it came from. This is why extraction output is never silently
-// load-bearing.
-// ---------------------------------------------------------------------------
+//confirms parameters
 export function isParameterConfirmed(
   profile: Pick<StoredContractProfile, 'meta' | 'parameters' | 'clauseMap'>,
   key: ConceptKey,
@@ -137,10 +106,9 @@ export function isParameterConfirmed(
   return profile.clauseMap[key]?.confirmed === true;
 }
 
-// ---------------------------------------------------------------------------
-// TIER 1
-// ---------------------------------------------------------------------------
+///////TIER 1
 
+//tier 1, part 1: exact deterministic values in the system
 function buildIdentityBlock(identity: ProjectIdentity): string {
   return [
     '## Project',
@@ -156,12 +124,9 @@ function buildIdentityBlock(identity: ProjectIdentity): string {
     .join('\n');
 }
 
-/**
- * Unconfirmed parameters are INCLUDED and marked, not omitted. Omitting them would leave the
- * model to fill the gap from its own FIDIC training — the silent-wrong-answer failure this
- * whole architecture exists to prevent. Marked-and-present lets it say "the extracted value is
- * 21 days but nobody has confirmed it yet".
- */
+//tier 1, part 2. Unconfirmed parameters are inlcuded and marked (yet to be implemented in the front end)
+//marked-and-present lets it say "the extracted value is 21 days but nobody has confirmed it yet".
+//this function confirms that these parameters persist in context despite discrepencies with other tiers 
 function buildParametersBlock(profile: StoredContractProfile): string {
   const absent = new Set(profile.absentConcepts);
   const lines: string[] = [
@@ -174,9 +139,11 @@ function buildParametersBlock(profile: StoredContractProfile): string {
     '',
   ];
 
+  //iterates through these deterministic values
   for (const key of Object.keys(CONCEPTS) as ConceptKey[]) {
     const name = profile.clauseMap[key]?.canonicalName ?? CONCEPTS[key].canonicalName;
 
+    //if absent: entire key is not there
     if (absent.has(key)) {
       lines.push(`- ${name}: NOT PRESENT in this contract. Do not cite it.`);
       continue;
@@ -185,9 +152,7 @@ function buildParametersBlock(profile: StoredContractProfile): string {
     const p = resolveParameter(profile, key);
     const ref = profile.clauseMap[key]?.sourceClauseRef;
 
-    // Unresolved is NOT a value. Nothing in any layer describes this concept, so there is no
-    // period, no deadline, and nothing to reason from. Saying so plainly is the only safe
-    // output — the alternative is the model supplying a standard-form period from memory.
+    //if unresolved: key is there, couldnt find the value
     if (!p.resolved) {
       lines.push(
         `- ${name}: NOT FOUND in this contract. No period is tracked. Do not state one, ` +
@@ -236,11 +201,9 @@ function buildParametersBlock(profile: StoredContractProfile): string {
   return lines.join('\n');
 }
 
-/**
- * The digest. Carries dates the ENGINE computed. The prohibition on recomputing is stated
- * inline, at the point the model is reading when it is tempted to.
- */
+//tier 1: part 3
 function buildDigestBlock(items: LiveDigestItem[]): string {
+  //no deterministic values found
   if (items.length === 0) {
     return [
       '## Live deadlines',
@@ -261,6 +224,7 @@ function buildDigestBlock(items: LiveDigestItem[]): string {
     '',
   ];
 
+  //sorts found deterministic values into order of importance
   for (const i of sorted) {
     const rel =
       i.daysRemaining === null
@@ -282,10 +246,9 @@ function buildDigestBlock(items: LiveDigestItem[]): string {
   return lines.join('\n');
 }
 
-// ---------------------------------------------------------------------------
-// TIER 2
-// ---------------------------------------------------------------------------
-
+/////TIER 2
+/*
+//uses matchConcepts() in concept-match.ts to return the relevant clauses
 function buildClauseBlock(profile: StoredContractProfile, matches: ConceptMatch[]): string | null {
   const entries = matches
     .map((m) => ({ match: m, entry: profile.clauseMap[m.key] }))
@@ -317,17 +280,15 @@ function buildClauseBlock(profile: StoredContractProfile, matches: ConceptMatch[
   }
 
   return lines.join('\n');
-}
+}*/
 
-// ---------------------------------------------------------------------------
-// TIER 3
-// ---------------------------------------------------------------------------
+/////TIER 3
 
+//uses retrieveChunks in retireve.ts for RAG
 function buildRetrievalBlock(result: RetrievalResult, alreadyCited: Set<string>): string | null {
   if (!result.available || result.chunks.length === 0) return null;
 
-  // Drop anything Tier 2 already supplied exactly. Tier 2's copy carries provenance and is
-  // authoritative; a fuzzy near-duplicate is token cost that invites self-contradiction.
+  // Drop anything Tier 2 already supplied exactly. 
   const fresh = result.chunks.filter(
     (c) => c.sourceClauseRef === null || !alreadyCited.has(c.sourceClauseRef),
   );
@@ -350,18 +311,17 @@ function buildRetrievalBlock(result: RetrievalResult, alreadyCited: Set<string>)
   return lines.join('\n');
 }
 
-// ---------------------------------------------------------------------------
-// Precedence. Assembled LAST — the position the model weights most heavily, and the only place
-// the ranking is stated. Without it the model averages its sources.
-// ---------------------------------------------------------------------------
+// Precedence: the application of the 3-tier system
 const PRECEDENCE_NOTE = `## Which source wins
 
 Highest first:
 1. Live deadlines — dates ClaimGuard computed. Relay, never recompute.
 2. Contract terms for this project — the periods and consequences this contract carries.
-3. Clause text from this contract — for wording, quotation, and citation.
-4. Other retrieved passages — supporting context only.
-5. Your own knowledge of the FIDIC Red Book — for explaining how a mechanism works in
+3. Project records — the event records and project lists below. Authoritative for what has
+   happened, what was sent, and what each party said. Never a source of deadlines.
+4. Clause text from this contract — for wording, quotation, and citation.
+5. Other retrieved passages — supporting context only.
+6. Your own knowledge of the FIDIC Red Book — for explaining how a mechanism works in
    general, and for nothing else.
 
 If a lower source appears to contradict a higher one, the higher one governs, and say so
@@ -371,9 +331,7 @@ If a project fact is not here, say it is not there. Do not fill the gap from gen
 knowledge — this contract may have amended exactly that provision, and a confident wrong
 period is worse than an admitted gap.`;
 
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
+
 
 export interface AssembleInput {
   question: string;
@@ -381,18 +339,12 @@ export interface AssembleInput {
   identity: ProjectIdentity;
   profile: StoredContractProfile;
   digest: LiveDigestItem[];
-  /** Supabase + OpenAI clients for Tier 3. Pass null to run on Tiers 1 and 2 alone — which is
-   *  a complete, correct assistant, just one without contract-wide search. */
+  //Supabase + OpenAI clients for Tier 3. Pass null to run on Tiers 1 and 2 alone
   retrievalDeps: RetrievalDeps | null;
 }
 
-/**
- * assembleContext — build the three-tier context for one turn.
- *
- * Tier 3 is awaited but never allowed to throw: a retrieval failure degrades the answer, it
- * does not break the chat. Tiers 1 and 2 are pure, so a total AI-infrastructure outage still
- * leaves the bot able to state every deadline correctly.
- */
+// build the three-tier context
+
 export async function assembleContext(input: AssembleInput): Promise<AssembledContext> {
   const { question, projectId, identity, profile, digest, retrievalDeps } = input;
 
@@ -403,8 +355,8 @@ export async function assembleContext(input: AssembleInput): Promise<AssembledCo
   ];
 
   const matchedConcepts = matchConcepts(question, profile);
-  const clauseBlock = buildClauseBlock(profile, matchedConcepts);
-  if (clauseBlock) blocks.push(clauseBlock);
+  //const clauseBlock = buildClauseBlock(profile, matchedConcepts);
+  //if (clauseBlock) blocks.push(clauseBlock);
 
   const alreadyCited = new Set(
     matchedConcepts

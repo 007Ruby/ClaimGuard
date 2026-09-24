@@ -1,4 +1,3 @@
-// components/chat/chat-panel.tsx
 // The chat UI (client component): message list, empty-state with example prompts,
 // loading indicator, and the input box (Enter to send, Shift+Enter for newline).
 // Sends the full running history to /api/chat each turn (the route is stateless).
@@ -6,12 +5,18 @@
 // message is kept and a retry-friendly notice is shown.
 
 "use client";
+//useState to rerender component upon changed value
+//useRef to persist a value across renders
+//useEffect for scrolling after renders
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Bot, User, Send } from "lucide-react";
 
+//JSON body posted to route (/api/chat)
+//a conversation is a list of these JSON Msg types
 type Msg = { role: "user" | "assistant"; content: string };
 
+//UI examples 
 const EXAMPLES = [
   "What deadlines am I waiting on the Engineer for?",
   "Summarise my open claims and their status.",
@@ -19,6 +24,7 @@ const EXAMPLES = [
   "Which events don't have a claim raised yet?",
 ];
 
+//takes in a msg and displays the UI message bubble for it
 function Bubble({ msg }: { msg: Msg }) {
   const isUser = msg.role === "user";
   return (
@@ -33,6 +39,7 @@ function Bubble({ msg }: { msg: Msg }) {
   );
 }
 
+//empty conversation UI
 function EmptyState({ onPick }: { onPick: (q: string) => void }) {
   return (
     <div className="space-y-4 pt-8 text-center">
@@ -56,13 +63,20 @@ function EmptyState({ onPick }: { onPick: (q: string) => void }) {
   );
 }
 
+
+
 export function ChatPanel() {
+  //differentiate plain errors from failed sections (e.g rfis, events, etc) in context assembly 
   const [loadStatus, setLoadStatus] = useState<"ok" | "partial" | "error">("ok");
   const [failedSections, setFailedSections] = useState<string[]>([]);
+
+  //setup messages, inputs, loading and error states
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  //scrolling container
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -70,13 +84,19 @@ export function ChatPanel() {
   }, [messages, loading]);
 
   async function send(text: string) {
+    //trim user input, and return early on empty text
     const q = text.trim();
     if (!q || loading) return;
+
+    //requests are stateless: with every new message, copy the existing message history into a new array,
+    //add the new message, and update the React messages state to the new array
     setError(null);
     const next: Msg[] = [...messages, { role: "user", content: q }];
     setMessages(next);
     setInput("");
     setLoading(true);
+
+    //send messages to /api/chat/route.ts and catch response with const json
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
@@ -85,10 +105,13 @@ export function ChatPanel() {
       });
       const json = await res.json().catch(() => null);
       if (!res.ok) throw new Error(json?.error ?? `Chat failed (HTTP ${res.status}).`);
+
+      //upon successful return, set update messages again, and update load status and failed section states
       setMessages((m) => [...m, { role: "assistant", content: json.reply }]);
       setLoadStatus(json.loadStatus ?? "ok");
       setFailedSections(Array.isArray(json.failedSections) ? json.failedSections : []);
     } catch (e: any) {
+      //user's message remains appended to messages to allow for user retry without retype
       console.error("[ChatPanel] send failed:", e);
       setError(e?.message ?? "Something went wrong. Your message is kept — try again.");
     } finally {
@@ -96,21 +119,25 @@ export function ChatPanel() {
     }
   }
 
+  //enter to send, shift + enter for new line
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); }
   }
 
+  //the render
   return (
     <div className="flex h-full flex-col">
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
         <div className="mx-auto max-w-2xl space-y-4 p-6">
             {loadStatus === "error" && (
+          //entire project data could not be loaded
             <div className="rounded-md bg-amber-50 p-3 text-sm text-amber-900">
               ⚠ Your project data couldn't be loaded (a network or connection issue). The
               assistant can only answer general questions until this is resolved — please try
               again shortly.
             </div>
           )}
+          //specific project data could not be loaded: those sections are highlighted in the response
           {loadStatus === "partial" && (
             <div className="rounded-md bg-amber-50 p-3 text-sm text-amber-900">
               ⚠ Some project data couldn't be loaded this session
@@ -118,6 +145,7 @@ export function ChatPanel() {
               incomplete — this is a loading issue, not that those records are empty.
             </div>
           )}
+          //what to show given empty messages vs a message history
           {messages.length === 0
             ? <EmptyState onPick={send} />
             : messages.map((m, i) => <Bubble key={i} msg={m} />)}

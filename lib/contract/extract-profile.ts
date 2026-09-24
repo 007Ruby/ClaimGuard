@@ -1,22 +1,5 @@
-// lib/contract/extract-profile.ts
-//
-// The SECOND pass over an uploaded contract: not "what are the parties and the amount", but
-// "what does each contractual step actually say, and what period does it run".
-//
-// ─────────────────────────────────────────────────────────────────────────────
-// THE ONE RULE: NOT FOUND MEANS NOT FOUND.
-//
-// The descriptive pass (in the extract route) tells the model to fall back to the FIDIC default
-// when it is unsure. That is fine for a display value and fatal here. A period written into
-// `parameters.contract` is labelled "From your contract" everywhere in the UI and is consumed
-// by the deadline engine — so a guessed default would tell the user their contract says
-// something it never said, and on a bespoke form would seed FIDIC periods into a contract that
-// never adopted them.
-//
-// So every prompt below says: return null rather than a standard value. A null lands the
-// concept in the `general` layer on a FIDIC profile (honest: the GC genuinely governs where
-// nothing amended it) or unresolved on a bespoke one (honest: we do not know).
-// ─────────────────────────────────────────────────────────────────────────────
+
+//maps concept keys to specific contract clauses
 
 import OpenAI from 'openai';
 import { CONCEPTS } from './concepts';
@@ -31,17 +14,17 @@ import type {
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-/** Clause-level reasoning on amended contracts — not a job for a mini model. */
+//Clause-level reasoning on amended contracts 
 const MODEL = 'gpt-5.6-terra';
 
-/** What one concept looks like coming back off the model, before validation. */
+//What one concept looks like coming back off the model, before validation. Validation to be implemented
 export interface ExtractedConcept {
   key: ConceptKey;
-  /** The clause number as PRINTED IN THIS CONTRACT — which may not be the FIDIC number. */
+  //The clause number as printed in this contract — which may not be the FIDIC number. 
   sourceClauseRef: string | null;
-  /** The clause heading as printed. */
+  //The clause heading as printed. 
   contractLabel: string | null;
-  /** Verbatim. This is what the user proofreads against and what the assistant quotes. */
+  //Verbatim. This is what the user proofreads against and what the assistant quotes. 
   text: string;
   durationDays: number | null;
   anchor: Anchor | null;
@@ -51,11 +34,11 @@ export interface ExtractedConcept {
 
 export type ExtractionResult = {
   concepts: ExtractedConcept[];
-  /** Concepts searched for and not found. Surfaced to the user, never silently filled. */
+  //Concepts searched for and not found. Surfaced to the user, never silently filled. 
   missing: ConceptKey[];
 };
 
-/** What to tell the model each concept IS, in contract-administration language. */
+//What to tell the model each concept is, in contract-administration language. 
 const DESCRIPTIONS: Record<ConceptKey, string> = {
   delayed_instruction:
     'The contractor giving notice that a drawing or instruction he needs has not arrived, and the works will be delayed or disrupted without it.',
@@ -79,7 +62,7 @@ const DESCRIPTIONS: Record<ConceptKey, string> = {
     'The contractor giving notice before suspending or reducing the rate of work for non-payment or non-certification.',
 };
 
-/** Search terms used to cut the relevant windows out of a long contract. */
+//Search terms used to cut the relevant windows out of a long contract. 
 const KEYWORDS: Record<ConceptKey, string[]> = {
   delayed_instruction: ['delayed drawing', 'delayed instruction', 'further drawing'],
   claim_notice: ['notice of claim', "contractor's claims", 'became aware', 'shall give notice'],
@@ -104,15 +87,7 @@ const GROUPS: { id: string; keys: ConceptKey[] }[] = [
   },
 ];
 
-/**
- * Cut windows of text around keyword hits.
- *
- * A conformed Conditions of Contract runs to hundreds of thousands of characters, and the
- * whole-document approach was already rejected on this project: burying five relevant clauses
- * in 400k characters of insurance and arbitration boilerplate dilutes precision rather than
- * improving recall. Windows keep the clauses that matter near the front of the model's
- * attention. Under the budget, the whole text goes through untouched.
- */
+//Cut windows of text around keyword hits.
 function selectWindows(text: string, keys: ConceptKey[], budget: number): string {
   if (text.length <= budget) return text;
 
@@ -203,9 +178,7 @@ function validate(raw: unknown, allowed: ConceptKey[]): ExtractedConcept[] {
     if (!allowed.includes(key)) continue;
     if (typeof c.text !== 'string' || c.text.trim().length < 20) continue;
 
-    // Anything not recognised is DROPPED, not coerced. A model returning an anchor outside the
-    // concept's valid set is not a typo to fix — it has misunderstood the clause, and its
-    // period is not to be trusted either.
+    // Anything not recognised is dropped, not coerced. 
     let anchor: Anchor | null = null;
     if (typeof c.anchor === 'string' && ANCHORS.includes(c.anchor as Anchor)) {
       if (CONCEPTS[key].validAnchors.includes(c.anchor as Anchor)) anchor = c.anchor as Anchor;
@@ -245,7 +218,7 @@ function validate(raw: unknown, allowed: ConceptKey[]): ExtractedConcept[] {
  * payment clauses live in different parts of the document, so splitting lets each call carry a
  * window budget spent entirely on clauses it actually needs. It also means a failure on one
  * group does not cost the other — the payment chain still populates if the claims call throws.
- */
+ */ 
 export async function extractConceptsFromText(text: string): Promise<ExtractionResult> {
   const results = await Promise.all(
     GROUPS.map(async (group) => {
@@ -276,7 +249,7 @@ export async function extractConceptsFromText(text: string): Promise<ExtractionR
   return { concepts, missing };
 }
 
-/** The parameters half of an extracted concept, in the shape the profile layer stores. */
+// The parameters half of an extracted concept, in the shape the profile layer stores. 
 export function toParameters(c: ExtractedConcept): Partial<ConceptParameters> {
   return {
     owner: c.owner,

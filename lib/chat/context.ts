@@ -1,70 +1,50 @@
-// Assembles the read-only "PROVIDED MATERIAL" the chatbot answers from — the
-// single source of everything the assistant knows about this project.
 
-// Pulls the contract (extracted key terms + full-text sidecar from storage) and
-// a system-computed project digest: events + evidence, awaiting-party deadlines,
-// claims, RFIs, follow-ups, and inbox flags. 
-
-// Deadlines from the obligation engine are labelled AUTHORITATIVE so the model 
-// relays them rather than recomputing.
-
-// Every section is independently try/caught: a failure logs and degrades that one
-// section to "(unavailable)" instead of breaking the whole context. 
-
-// Lists and the contract text are capped to keep prompt size (cost/latency) bounded.
-
+//get client and project data 
 import { createClient } from "@/lib/supabase/server";
 import { getSessionContext } from "@/lib/queries/session";
+import { buildFocus, type EventMatch } from "./focus";
+import type { LiveDigestItem } from "./assemble";
+import type { RetrievalResult } from "./retrieval";
+//get claim, evidence, event, followups, evidence data
 import { listClaims } from "@/lib/queries/claims";
 import { listEventsWithEvidence } from "@/lib/queries/events";
 import { listAwaitingEvents, listSavedFollowUps } from "@/lib/queries/follow-ups";
 import { listInboxCards } from "@/lib/queries/inbox";
 import { assembleContext, buildIdentity } from "./assemble";
+
+//get contract, and determinsitic engine data
 import { asProjectContractData } from "@/lib/contract/contract-data";
 import { loadChatDigest } from "@/lib/fidic/get-obligations";
 import OpenAI from "openai";
 
-
-
-
-const CONTRACT_TEXT_CHAR_CAP = 30000;
 const MAX_ITEMS = 60;
 
+//normalises input (takes care of nullish inputs, whitespaces, etc)
 function trunc(s: string | null | undefined, n: number): string {
   if (!s) return "";
   const t = s.replace(/\s+/g, " ").trim();
   return t.length > n ? t.slice(0, n) + "…" : t;
 }
 
+//catches failed sections, pushes it to the failedSections array, and returns the string that will go into prompt
 function sectionFailed(failed: string[], label: string, e: unknown): string {
   console.error(`[chat context] ${label} failed:`, e);
   failed.push(label);
   return `${label}\n(⚠ COULD NOT BE LOADED this session — a loading/technical error, NOT a sign there are none)`;
 }
 
+//joins lines to meet MAX_ITEMS limit 
 function capList(lines: string[]): string {
   if (lines.length <= MAX_ITEMS) return lines.join("\n");
   return lines.slice(0, MAX_ITEMS).join("\n") + `\n…and ${lines.length - MAX_ITEMS} more`;
 }
 
-function contractTerms(data: Record<string, any>): string {
-  const p = data.parties ?? {};
-  const ov = data.dayOverrides ?? {};
-  const periodLine = Object.keys(ov).length
-    ? Object.entries(ov).map(([k, v]) => `${k}=${v}`).join(", ")
-    : "(FIDIC GC defaults)";
-  return [
-    "CONTRACT KEY TERMS (extracted values — authoritative for figures)",
-    `- Project: ${data.name ?? "—"}`,
-    `- Employer: ${p.employer ?? "—"} | Contractor: ${p.contractor ?? "—"} | Engineer: ${p.engineer ?? "—"}`,
-    `- Accepted Contract Amount: ${data.acceptedContractAmount ?? "—"} ${data.currency ?? ""}`.trim(),
-    `- Commencement: ${data.commencementDate ?? "—"}`,
-    `- Time for Completion: ${data.timeForCompletionDays ?? "—"} days`,
-    `- Defects Notification Period: ${data.defectsNotificationPeriodDays ?? "—"} days`,
-    `- Governing law: ${data.governingLaw ?? "—"}`,
-    `- Contractual periods (days): ${periodLine}`,
-  ].join("\n");
+export interface ChatTrace {
+  digest: LiveDigestItem[];
+  retrieval: RetrievalResult | null;
+  eventMatch: { matches: EventMatch[]; candidates: EventMatch[] };
 }
+export const EMPTY_TRACE: ChatTrace = { digest: [], retrieval: null, eventMatch: { matches: [], candidates: [] } };
 
 export async function buildChatContext(question: string) {
   const { projectId } = await getSessionContext();
@@ -72,22 +52,23 @@ export async function buildChatContext(question: string) {
   const failedSections: string[] = [];
   let contractError = false;
   const parts: string[] = [];
-
-  // --- contract profile: the load-bearing one -------------------------------
+  const trace: ChatTrace = { digest: [], retrieval: null, eventMatch: { matches: [], candidates: [] } };
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  //contract profile: the load-bearing one 
   try {
+    //get project data, and throw error if unable
     const { data: row } = await supabase
       .from("project_contracts")
-      .select("commencement_date, data")   // ← the date lives here, not in a separate call
+      .select("commencement_date, data")   // the date lives here
       .eq("project_id", projectId)
       .maybeSingle();
 
     const data = asProjectContractData(row?.data);
     if (!data?.contractProfile) throw new Error("No contract profile on this project.");
-
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
+    //get assembled context from contract
+const digest = await loadChatDigest();
 const assembled = await assembleContext({
-  question,
+  question, //for tier 2 
   projectId,
   identity: buildIdentity({
     projectName: data.name ?? "This project",
@@ -95,17 +76,23 @@ const assembled = await assembleContext({
     commencementDate: row?.commencement_date ?? null,
   }),
   profile: data.contractProfile,
-  digest: await loadChatDigest(),
-  retrievalDeps: { supabase, openai },   // ← the missing property
+  digest,
+  retrievalDeps: { supabase, openai },
 });
 
     parts.push(...assembled.blocks);
+    trace.digest = digest;
+    trace.retrieval = assembled.retrieval;
   } catch (e) {
     console.error("[chat/context] contract load failed:", e);
     contractError = true;
   }
+    // Focus: full records for the event(s) this question is about
+  const focus = await buildFocus(question, projectId, supabase, openai);
+  trace.eventMatch = { matches: focus.matches, candidates: focus.candidates };
+  if (focus.block) parts.push(focus.block);
 
-  // --- Events (with linked evidence) ---
+  // Events (with linked evidence) 
   try {
     const events = await listEventsWithEvidence();
     const lines = events.map((ev: any) => {
@@ -116,7 +103,7 @@ const assembled = await assembleContext({
     parts.push(`EVENTS (${events.length})\n${capList(lines) || "(none)"}`);
   } catch (e) { parts.push(sectionFailed(failedSections, "EVENTS", e)); }
 
-  // --- Deadlines awaiting the other party (system-computed) ---
+  // Deadlines awaiting the other party (system-computed) 
   try {
     const awaiting = await listAwaitingEvents();
     const lines = awaiting.map(
@@ -131,7 +118,7 @@ const assembled = await assembleContext({
     );
   } catch (e) { parts.push(sectionFailed(failedSections, "DEADLINES", e)); }
 
-  // --- Claims ---
+  //  Claims 
   try {
     const claims = await listClaims();
     const lines = claims.map((c: any) => {
@@ -145,7 +132,7 @@ const assembled = await assembleContext({
     parts.push(`CLAIMS (${claims.length})\n${capList(lines) || "(none)"}`);
   } catch (e) { parts.push(sectionFailed(failedSections, "CLAIMS", e)); }
 
-  // --- RFIs (queried directly; assumes table `rfis`) ---
+  //  RFIs 
   try {
     const { data, error } = await supabase
       .from("rfis")
@@ -162,7 +149,7 @@ const assembled = await assembleContext({
   }  catch (e) { parts.push(sectionFailed(failedSections, "RFIs", e)); }
 
 
-  // --- Follow-ups ---
+  // Follow-ups 
   try {
     const fus = await listSavedFollowUps();
     const lines = fus.map(
@@ -173,7 +160,7 @@ const assembled = await assembleContext({
     parts.push(`FOLLOW-UPS (${fus.length})\n${capList(lines) || "(none)"}`);
   } catch (e) { parts.push(sectionFailed(failedSections, "FOLLOWUPs", e)); }
 
-  // --- Evidence / inbox (metadata + flags only, not full content) ---
+  // Evidence / inbox (metadata + flags only, not full content) 
   try {
     const cards = await listInboxCards();
     const lines = cards.map(
@@ -184,5 +171,5 @@ const assembled = await assembleContext({
     );
     parts.push(`EVIDENCE / INBOX (${cards.length})\n${capList(lines) || "(none)"}`);
   } catch (e) { parts.push(sectionFailed(failedSections, "EVIDENCE", e)); }
-  return { context: parts.join("\n\n"), contractError, failedSections };
+    return { context: parts.join("\n\n"), contractError, failedSections, trace };
 }

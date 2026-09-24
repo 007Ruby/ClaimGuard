@@ -1,42 +1,26 @@
-// lib/chat/retrieval.ts
-//
-// TIER 3 — always-on, relevance-gated semantic retrieval over the contract corpus.
-//
-// ─────────────────────────────────────────────────────────────────────────────
-// ALWAYS RETRIEVE, THEN THRESHOLD-GATE. Not: pre-classify whether the question "needs" the
-// contract and skip retrieval if not. Pre-classification is a second judgement that can be
-// wrong in the expensive direction — deciding a question is off-contract when the answer was
-// in clause 47. Retrieval is cheap; the gate is a threshold on a number, not an opinion.
-// ─────────────────────────────────────────────────────────────────────────────
-//
-// FAILS SOFT, ALWAYS. Every path returns `available: false` rather than throwing. Tiers 1 and 2
-// answer every deadline question with this tier entirely absent, and a chat route that 500s
-// because an embedding call timed out is a far worse outcome than a thinner answer.
+
+// relevance-gated semantic retrieval over the contract corpus.
 
 import { EMBEDDING_MODEL } from '@/lib/contract/ingest';
 
 export interface CorpusChunk {
   id: string;
-  /** Verbatim contract prose. Never paraphrased at storage time. */
+  //Verbatim contract prose. Never paraphrased at storage time. 
   text: string;
-  /** The contract's own clause number, where the chunk carries one. */
+  // The contract's own clause number, where the chunk carries one. 
   sourceClauseRef: string | null;
   page: number | null;
 }
 
 export interface RetrievedChunk extends CorpusChunk {
-  /** Cosine similarity, 0–1. */
+  //Cosine similarity, 0–1.
   score: number;
 }
 
-/**
- * The similarity floor. Deliberately conservative: a weak chunk is not neutral, it is a
- * distractor competing with the confirmed parameters in Tier 1. Tune against real questions
- * once you have a corpus — start by logging scores and reading what lands between 0.5 and 0.7.
- */
+//Similarity floor, quite conservative. Testing will determine if this should change
 export const RELEVANCE_FLOOR = 0.62;
 
-/** Cap on chunks admitted per turn, after gating. */
+//Cap on chunks admitted per turn, after gating. 
 export const MAX_CHUNKS = 4;
 
 /** Candidates pulled before gating. Wider than MAX_CHUNKS so the floor does the selecting. */
@@ -44,6 +28,9 @@ const CANDIDATE_LIMIT = 20;
 
 export interface RetrievalResult {
   chunks: RetrievedChunk[];
+  /** Every candidate row before the relevance floor, scores only - for tuning the floor.
+   *  Absent when retrieval didn't run. */
+  candidates?: { id: string; sourceClauseRef: string | null; score: number }[];
   /** False when retrieval could not run at all. Distinct from "ran and found nothing", which
    *  is a valid, common result with chunks: []. */
   available: boolean;
@@ -74,14 +61,7 @@ export interface RetrievalDeps {
   };
 }
 
-/**
- * retrieveChunks — Tier 3 entry point.
- *
- * Dependencies are injected rather than imported, so this is testable without a database and
- * the chat route owns client construction. Pass `null` to disable the tier entirely — useful
- * while a corpus is being rebuilt, and the honest state for a project whose PDF has no text
- * layer.
- */
+//RAG entery point
 export async function retrieveChunks(
   question: string,
   projectId: string,
@@ -128,7 +108,15 @@ export async function retrieveChunks(
         score: r.score,
       }));
 
-    return { chunks, available: true };
+    return {
+      chunks,
+      candidates: rows.map((r) => ({
+        id: r.chunk_id,
+        sourceClauseRef: r.source_clause_ref,
+        score: r.score,
+      })),
+      available: true,
+    };
   } catch (err) {
     console.error('[retrieval] unexpected failure:', err);
     return UNAVAILABLE('Retrieval failed.');

@@ -1,19 +1,8 @@
-// lib/contract/resolve.ts
-//
-// THE single resolver for the parameters layer. Every consumer — the engine adapter, the
-// Workflows UI, the bot's context assembler — resolves through resolveParameter(), so there is
-// exactly one place the three-layer merge happens.
-//
-// LAYERS, highest wins:
+// resolves parameter layers
+// layers, highest wins:
 //   manual    profile.parameters.manual[key]    — the user typed it
 //   contract  profile.parameters.contract[key]  — extraction read it from the document
 //   general   FIDIC_DEFAULTS[key]               — ONLY when meta.profileType === 'fidic'
-//
-// The last line is the whole point. For a bespoke contract there is no general layer, so a
-// field no layer supplies comes back UNRESOLVED rather than silently inheriting FIDIC. An
-// unresolved concept computes no deadline and shows on the Workflows page as needing
-// attention. This is the difference between "we don't know" and "28 days", and conflating them
-// is how a system invents a time bar the contract never contained.
 
 import type {
   ConceptKey,
