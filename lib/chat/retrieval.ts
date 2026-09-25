@@ -1,5 +1,5 @@
 
-// relevance-gated semantic retrieval over the contract corpus.
+// relevance-augmented generation (RAG): semantic retrieval over the contract corpus.
 
 import { EMBEDDING_MODEL } from '@/lib/contract/ingest';
 

@@ -48,14 +48,18 @@ const FOLLOWUP_STEPS = new Set([
   "14.7-payment",
 ]);
 
-
 function daysRemaining(iso: string | null): number | null {
   if (!iso) return null;
+
   const due = new Date(iso + "T00:00:00.000Z").getTime();
-  const now = new Date();
-  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+
+  // DEV/EVAL ONLY: keep frontend date aligned with EVAL_TODAY.
+  const today = Date.parse("2026-09-22T00:00:00.000Z");
+
   return Math.round((due - today) / 86_400_000);
 }
+
+
 
 const MONTHS_SHORT = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",

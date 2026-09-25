@@ -2,20 +2,22 @@
 //get client and project data 
 import { createClient } from "@/lib/supabase/server";
 import { getSessionContext } from "@/lib/queries/session";
-import { buildFocus, type EventMatch } from "./focus";
-import type { LiveDigestItem } from "./assemble";
-import type { RetrievalResult } from "./retrieval";
+
 //get claim, evidence, event, followups, evidence data
 import { listClaims } from "@/lib/queries/claims";
 import { listEventsWithEvidence } from "@/lib/queries/events";
 import { listAwaitingEvents, listSavedFollowUps } from "@/lib/queries/follow-ups";
 import { listInboxCards } from "@/lib/queries/inbox";
-import { assembleContext, buildIdentity } from "./assemble";
+import { assembleContext, buildIdentity, LiveDigestItem } from "./assemble";
 
 //get contract, and determinsitic engine data
 import { asProjectContractData } from "@/lib/contract/contract-data";
 import { loadChatDigest } from "@/lib/fidic/get-obligations";
 import OpenAI from "openai";
+
+
+import { buildFocus, type EventMatch } from "./focus";
+import type { RetrievalResult } from "./retrieval";
 
 const MAX_ITEMS = 60;
 

@@ -34,3 +34,23 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+
+## Currently in evaluation mode, where date is set to 22nd September 2026.
+
+To return to live date:
+    - in obligation-item.tsx, replace daysRemaining with
+
+    function daysRemaining(iso: string | null): number | null {
+        if (!iso) return null;
+        const due = new Date(iso + "T00:00:00.000Z").getTime();
+        const now = new Date();
+        const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+        return Math.round((due - today) / 86_400_000);
+        }
+    
+    this will fix the client end
+
+    - in .env.local, remove EVAL_TODAY to fix the server end.
+
+Note: a mismatch between the client and server sides will cause a hydration error
