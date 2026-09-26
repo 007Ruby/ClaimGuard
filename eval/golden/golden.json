@@ -1,0 +1,184 @@
+{
+  "meta": {
+    "version": "0.1",
+    "today": "2026-09-22",
+    "project_id": "a2cb9b53-cdd6-482c-82d4-89160f369c44",
+    "note": "Dates are absolute because both the seed and the server clock are frozen at 2026-09-22. Reference answers pending expert sign-off (see section 4 of the eval set doc)."
+  },
+  "events": {
+    "E-01": "e0000000-0000-4000-8000-000000000001",
+    "E-02": "e0000000-0000-4000-8000-000000000002",
+    "E-03": "e0000000-0000-4000-8000-000000000003",
+    "E-04": "e0000000-0000-4000-8000-000000000004",
+    "E-05": "e0000000-0000-4000-8000-000000000005",
+    "E-06": "e0000000-0000-4000-8000-000000000006"
+  },
+  "items": [
+    {
+      "id": "Q1",
+      "tags": ["triage", "time-bar", "records"],
+      "question": "What's the most urgent thing I need to deal with today?",
+      "reference_answer": "Serve the Sub-Clause 20.1 notice for the oral façade instruction (E-05) today. Awareness was 25 August 2026, so the 28-day notice period expires today, 22 September 2026, and missing it bars the entitlement. A draft notice exists but has not been served. Do not wait for the Engineer to answer RFI-003 confirming the instruction — serve the notice regardless. Next: the detailed claim for the basement rock (E-02) is due 29 September, and IPC 2 (E-03) has been unpaid since 31 August.",
+      "must_include": [
+        { "kind": "any", "options": ["today", "2026-09-22"] },
+        { "kind": "text", "value": "20.1" }
+      ],
+      "must_exclude": [],
+      "must_not_say": [
+        "wait for the Engineer's response to RFI-003 before serving the notice",
+        "that any event other than the façade instruction is the most urgent item"
+      ],
+      "expected_events": ["e0000000-0000-4000-8000-000000000005"],
+      "expected_clauses": ["20.1", "3.3"]
+    },
+    {
+      "id": "Q2",
+      "tags": ["deadline", "entitlement"],
+      "question": "When is the detailed claim for the rock in the basement due, and can I include profit?",
+      "reference_answer": "29 September 2026, seven days from today — 42 days from awareness on 18 August. Under Sub-Clause 4.12 the Contractor may claim an extension of time and Cost, but not profit. This contract's 20.1 says 'within 42 days' without stating the start point; 29 September uses the standard FIDIC anchor of awareness.",
+      "must_include": [
+        { "kind": "date", "value": "2026-09-29" },
+        { "kind": "text", "value": "4.12" }
+      ],
+      "must_exclude": [{ "kind": "date", "value": "2026-10-13" }],
+      "must_not_say": ["that profit is recoverable under Sub-Clause 4.12"],
+      "expected_events": ["e0000000-0000-4000-8000-000000000002"],
+      "expected_clauses": ["4.12", "20.1"]
+    },
+    {
+      "id": "Q3",
+      "tags": ["payment", "options", "records"],
+      "question": "IPC 2 still hasn't been paid. What are my options?",
+      "reference_answer": "Payment was due 31 August 2026, 56 days after the Engineer received Statement 2 on 6 July, and is 22 days overdue. Financing charges accrue under Sub-Clause 14.8 at EIBOR plus 3% per annum compounded monthly on the overdue AED 6,975,000. The Contractor may suspend or reduce the rate of work under Sub-Clause 16.1 after at least 21 days' notice, with entitlement to time and Cost plus profit. If still unpaid by 23 November 2026 (84 days after the due date) a right to terminate arises under 16.2(c) on 14 days' notice. The Employer's email attributing the delay to lender funding is not a contractual ground; evidence of financial arrangements can be requested under 2.4. A chaser was sent 2 September and a second is in draft.",
+      "must_include": [
+        { "kind": "date", "value": "2026-08-31" },
+        { "kind": "amount", "value": 6975000 },
+        { "kind": "text", "value": "14.8" },
+        { "kind": "text", "value": "16.1" },
+        { "kind": "text", "value": "21" }
+      ],
+      "must_exclude": [{ "kind": "date", "value": "2026-09-24" }],
+      "must_not_say": [
+        "that work may be suspended without giving notice first",
+        "that the Employer's lender funding justifies late payment"
+      ],
+      "expected_events": ["e0000000-0000-4000-8000-000000000003"],
+      "expected_clauses": ["14.7", "14.8", "16.1", "2.4"]
+    },
+    {
+      "id": "Q4",
+      "tags": ["payment", "anchor"],
+      "question": "When should the Employer pay IPC 3?",
+      "reference_answer": "30 September 2026 — 56 days after the Engineer received Statement 3 on 5 August. The clock runs from the Engineer's receipt of the Statement under 14.7(b), confirmed by PC-14.7, not from the IPC issue date of 9 September. Separately the IPC was seven days late: due 2 September under 14.6. The Engineer also excluded VO-004 (AED 650,000), which is worth contesting.",
+      "must_include": [
+        { "kind": "date", "value": "2026-09-30" },
+        { "kind": "text", "value": "14.7" }
+      ],
+      "must_exclude": [{ "kind": "date", "value": "2026-11-04" }],
+      "must_not_say": ["that the payment period runs from the date the IPC was issued"],
+      "expected_events": ["e0000000-0000-4000-8000-000000000004"],
+      "expected_clauses": ["14.6", "14.7"]
+    },
+    {
+      "id": "Q5",
+      "tags": ["time-bar", "negative"],
+      "question": "Can I still claim for the ADDC power connection delay?",
+      "reference_answer": "Almost certainly not. The notice deadline was 7 August 2026, 28 days after awareness on 10 July. No notice was given, so under 20.1 the entitlement to time and money for this delay is barred. This contract's 20.1 does allow the Engineer to accept a later notice where he considers the circumstances justify it, but that is his discretion rather than an entitlement, and advice should be taken before relying on it.",
+      "must_include": [
+        { "kind": "date", "value": "2026-08-07" },
+        { "kind": "text", "value": "20.1" }
+      ],
+      "must_exclude": [],
+      "must_not_say": [
+        "that the notice could be backdated or dated differently",
+        "that the awareness date could be restated to bring the notice back in time",
+        "that the claim should be re-framed under another clause to avoid the time bar"
+      ],
+      "expected_events": ["e0000000-0000-4000-8000-000000000006"],
+      "expected_clauses": ["20.1", "8.5"]
+    },
+    {
+      "id": "Q6",
+      "tags": ["retrieval", "particular-conditions"],
+      "question": "How is the advance payment being recovered?",
+      "reference_answer": "Under PC-14.2, not the General Conditions. The AED 15,000,000 advance is recovered by deducting 12.5% of the gross value certified in each IPC, excluding VAT and retention, until fully repaid, and must be fully recovered by the Taking-Over Certificate at the latest. The General Conditions mechanism — starting once certified payments pass 10% and finishing at 80% — does not apply.",
+      "must_include": [
+        { "kind": "amount", "value": 15000000 },
+        { "kind": "text", "value": "12.5" }
+      ],
+      "must_exclude": [{ "kind": "text", "value": "80%" }],
+      "must_not_say": ["that recovery begins at 10% of the Contract Price and completes at 80%"],
+      "expected_events": [],
+      "expected_clauses": ["14.2", "PC-14.2"]
+    },
+    {
+      "id": "Q7",
+      "tags": ["retrieval", "deleted-clause"],
+      "question": "If the Engineer's determination on the MEP drawings claim goes against us, where do we take the dispute?",
+      "reference_answer": "Straight to arbitration: this contract deletes the Dispute Adjudication Board at PC-20.2 to 20.6. Give written notice of dispute; if it is not settled amicably within 30 days it goes to arbitration administered by the Dubai International Arbitration Centre under the DIAC Rules, before three arbitrators, seated in Abu Dhabi, in English.",
+      "must_include": [
+        { "kind": "text", "value": "DIAC" },
+        { "kind": "text", "value": "30" },
+        { "kind": "text", "value": "Abu Dhabi" },
+        { "kind": "any", "options": ["three arbitrators", "3 arbitrators"] }
+      ],
+      "must_exclude": [
+        { "kind": "text", "value": "Dispute Adjudication Board" },
+        { "kind": "text", "value": "DAB" }
+      ],
+      "must_not_say": [
+        "that the dispute should be referred to a Dispute Adjudication Board",
+        "that a DAB decision is due within 84 days"
+      ],
+      "expected_events": ["e0000000-0000-4000-8000-000000000001"],
+      "expected_clauses": ["20.6", "PC-20.6", "3.5"]
+    },
+    {
+      "id": "Q8",
+      "tags": ["gap", "honesty"],
+      "question": "How long does the Engineer have to respond to my detailed claim for the MEP drawings?",
+      "reference_answer": "This contract sets no period. Its 20.1 requires notice within 28 days and a detailed claim within 42, but unlike standard FIDIC 1999 it gives the Engineer no response deadline. The Engineer responded on 18 August in any case; the disputed Cost now sits with his determination under 3.5, which also has no fixed deadline and can be chased with a follow-up.",
+      "must_include": [{ "kind": "text", "value": "3.5" }],
+      "must_exclude": [],
+      "must_not_say": [
+        "that this contract gives the Engineer 42 days to respond to a claim",
+        "that a specific deadline applies to the Engineer's response under this contract"
+      ],
+      "expected_events": ["e0000000-0000-4000-8000-000000000001"],
+      "expected_clauses": ["20.1", "3.5"]
+    },
+    {
+      "id": "Q9",
+      "tags": ["records", "rfi", "inbox"],
+      "question": "Is there anything unclear on the basement rock claim I should raise with the Engineer before submitting?",
+      "reference_answer": "Yes — the borehole data. The geotechnical report gives no rock level for BH-3 and BH-4 and the BH-5 log is missing, although the Employer had to provide all sub-surface data before the Base Date of 12 February 2026 under 4.10. RFI-002 asks for it but is still a draft: send it now, but do not hold the detailed claim for the answer, because it remains due 29 September and the RFI does not extend it. Separately, the Engineer's 3 September email calling the emailed notice invalid is wrong: Sub-Clause 1.3 allows email with hard-copy confirmation, which was couriered on 2 September.",
+      "must_include": [
+        { "kind": "text", "value": "BH-5" },
+        { "kind": "text", "value": "4.10" },
+        { "kind": "date", "value": "2026-09-29" }
+      ],
+      "must_exclude": [],
+      "must_not_say": [
+        "that raising an RFI extends the detailed claim deadline",
+        "that the emailed notice of claim was invalid"
+      ],
+      "expected_events": ["e0000000-0000-4000-8000-000000000002"],
+      "expected_clauses": ["4.10", "4.12", "1.3", "20.1"]
+    },
+    {
+      "id": "Q10",
+      "tags": ["retrieval", "exposure"],
+      "question": "If we finish late, what's our exposure to delay damages?",
+      "reference_answer": "AED 150,000 per day of delay, being 0.10% of the Contract Price, capped at AED 15,000,000 or 10%. Delay is measured against the Time for Completion of 31 October 2027 as extended by any EOT granted. Under PC-8.7 a UAE court retains a discretion under Article 390(2) to adjust agreed damages shown to be manifestly excessive or inadequate.",
+      "must_include": [
+        { "kind": "amount", "value": 150000 },
+        { "kind": "amount", "value": 15000000 },
+        { "kind": "date", "value": "2027-10-31" }
+      ],
+      "must_exclude": [],
+      "must_not_say": ["that delay damages are uncapped"],
+      "expected_events": [],
+      "expected_clauses": ["8.7", "PC-8.7", "8.2"]
+    }
+  ]
+}
