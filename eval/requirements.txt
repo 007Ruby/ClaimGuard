@@ -1,0 +1,4 @@
+langfuse>=4.10
+openai>=1.60
+requests>=2.32
+python-dotenv>=1.0
